@@ -19,4 +19,4 @@ To generate and output file and send it to your Switch, in the command line, nav
 If you would like to generate a debug CSV file displaying each frame of the generated output file, include the option ```-d``` before the path to the TSV file (```-fd``` if you also want to use the FTP feature). The debug file will be generated in the ```TSV-TAS-2``` directory.
 
 ## Converting nx-tas to TSV-TAS
-To convert an nx-tas script to a TSV-TAS script, in the command line, navigate to the ```TSV-TAS-2``` directory and enter ```python3 nx-tas-to-tsv-tas.py [path to nx-TAS file] [path to output file]```.
+To convert an nx-tas script to a TSV-TAS script, in the command line, navigate to the ```TSV-TAS-2``` directory and enter ```python3 nx-tas-to-tsv-tas.py [path to nx-tas file] [path to output file]```.
