@@ -200,7 +200,7 @@ with open(inpath) as infile:
             frames.append(frame)
 
         #check for repeated frames
-        if frames[-1].buttons == button_list and frames[-1].left_stick == left_stick and frames[-1].right_stick == right_stick:
+        if len(frames) > 0 and frames[-1].buttons == button_list and frames[-1].left_stick == left_stick and frames[-1].right_stick == right_stick:
             frames[-1].duration += 1
         else:
             frame = Frame(1, button_list, left_stick, right_stick)
