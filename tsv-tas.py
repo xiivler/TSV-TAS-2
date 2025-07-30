@@ -244,8 +244,8 @@ def evaluateMath(token, whole_token): #evaluates math expressions
     if whole_token: #match math expressions that take up the whole token
         math_regex = "^(([0-9,\\. \\+\\*\\-\\(\\)])+([\\+\\*\\-])([0-9,\\. \\+\\*\\-\\(\\)])+)$"
         group = 1
-    else: #match math expressions that begin/end with parentheses, commas, or semicolons (probably should add brackets too)
-        math_regex = "([\\(\\,\\;])(([0-9,\\. \\+\\*\\-\\(\\)])+([\\+\\*\\-])([0-9,\\. \\+\\*\\-\\(\\)])+)([\\)\\,\\;])"
+    else: #match math expressions that begin/end with parentheses, commas, brackets, or semicolons
+        math_regex = "([\\(\\,\\;\\[])(([0-9,\\. \\+\\*\\-\\(\\)])+([\\+\\*\\-])([0-9,\\. \\+\\*\\-\\(\\)])+)([\\)\\,\\;\\]])"
         group = 2
     # print("token before search: " + token)
     while match_obj := re.search(math_regex, token): #evaluate math operations
@@ -268,7 +268,11 @@ def evaluateCurrentFrame(token, offset): #replaces any @ marks with offset, then
 #parses the duration of a token
 def parseDuration(token, default):
     try:
-        duration = int(token[token.index('[') + 1 : token.index(']')])
+        duration_str = token[token.index('[') + 1 : token.index(']')].strip()
+        if duration_str == '?' or duration_str == '*': #special duration characters
+            duration = duration_str
+        else:
+            duration = int(duration_str)
         token = token.replace(token[token.index('[') : token.index(']') + 1], '')
         return token.strip(), duration
     except:
@@ -321,7 +325,7 @@ def getGyroValues(token):
     return Gyro(euler, toRotationMatrix(euler), ang_vel)
 
 #parses token into subtokens
-def parseToken(token, indexWrite, duration, rowIndex):
+def parseToken(token, indexWrite, duration, rowIndex, rowDuration):
     print("Parsing: " + token)
     print("Write Index: " + str(indexWrite))
     
@@ -331,9 +335,9 @@ def parseToken(token, indexWrite, duration, rowIndex):
     
     print("Duration: " + str(duration))
 
-    if token[0] == '(' and token[-1] == ')': token = token[1 : -1] #remove enclosing parentheses
+    if len(token) > 0 and token[0] == '(' and token[-1] == ')': token = token[1 : -1] #remove enclosing parentheses
 
-    if "|" in token: parseSequence(token, indexWrite, rowIndex)
+    if "|" in token: parseSequence(token, indexWrite, rowIndex, rowDuration)
     elif "/" in token: parseLoop(token, indexWrite, duration, rowIndex)
     elif "->" in token: parseInterpolatedStick(token, indexWrite, duration)
     else:
@@ -386,14 +390,20 @@ def parseInterpolatedStick(token, indexStart, duration):
         if debug: print(e)
         quit(-1)
 
-def parseSequence(token, indexWrite, rowIndex):
+def parseSequence(token, indexWrite, rowIndex, rowDuration):
     steps = token.split('|')
     for i in range(len(steps)):
         subtoken, duration = parseDuration(steps[i], 1) #parse out duration
-        parseToken(subtoken, indexWrite, duration, rowIndex)
+        if duration == '*':
+            print("* not supported for durations within sequences (line " + str(lineInNumber) + ")")
+        elif duration == '?':
+            print("row duration: " + str(rowDuration))
+            duration = rowDuration + rowIndex - indexWrite
+            if duration < 0: duration = 0
+        parseToken(subtoken, indexWrite, duration, rowIndex, rowDuration)
         indexWrite += duration
 
-def parseLoop(token, indexWrite, duration, rowIndex):
+def parseLoop(token, indexWrite, duration, rowIndex, rowDuration):
     if duration == 0:
         return
     elif duration < 0:
@@ -412,7 +422,7 @@ def parseLoop(token, indexWrite, duration, rowIndex):
         for i in range(len(steps)):
             if remainingDuration <= 0: return
             if durations[i] >= 0:
-                parseToken(subtokens[i], indexWrite, min(durations[i], remainingDuration), rowIndex)
+                parseToken(subtokens[i], indexWrite, min(durations[i], remainingDuration), rowIndex, rowDuration)
                 remainingDuration -= durations[i]
             else:
                 print("Negative durations are not permitted within loops")
@@ -671,7 +681,7 @@ with open(infile) as f:
             script.frame_count = len(script.frames) """
 
             print("Line duration: " + str(lineInDuration))
-            parseToken(token, indexStart, lineInDuration, indexStart)
+            parseToken(token, indexStart, lineInDuration, indexStart, lineInDuration)
 
         indexStart += lineInDuration
         lineInNumber += 1
