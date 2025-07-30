@@ -235,14 +235,14 @@ def evaluateVariables(token, row_duration): #evaluates all variables of form $ o
             print("Variable " + match_obj.group() + " not found")
             quit(-1)
 
-    token.replace('#', str(row_duration))
+    token = token.replace('#', str(row_duration))
 
     return token.lower()
 
 
 def evaluateMath(token, whole_token): #evaluates math expressions
     if whole_token: #match math expressions that take up the whole token
-        math_regex = "(([0-9,\\. \\+\\*\\-\\(\\)])+([\\+\\*\\-])([0-9,\\. \\+\\*\\-\\(\\)])+)"
+        math_regex = "^(([0-9,\\. \\+\\*\\-\\(\\)])+([\\+\\*\\-])([0-9,\\. \\+\\*\\-\\(\\)])+)$"
         group = 1
     else: #match math expressions that begin/end with parentheses, commas, or semicolons (probably should add brackets too)
         math_regex = "([\\(\\,\\;])(([0-9,\\. \\+\\*\\-\\(\\)])+([\\+\\*\\-])([0-9,\\. \\+\\*\\-\\(\\)])+)([\\)\\,\\;])"
@@ -260,6 +260,11 @@ def evaluateLast(token, prev): #replaces any ! marks with prev, then calls evalu
     # print("Replaced token: " + token)
     return evaluateMath(token, True)
 
+def evaluateCurrentFrame(token, offset): #replaces any @ marks with offset, then calls evaluateMath
+    token = token.replace('@', str(offset))
+    # print("Replaced token: " + token)
+    return evaluateMath(token, True)
+
 #parses the duration of a token
 def parseDuration(token, default):
     try:
@@ -269,34 +274,25 @@ def parseDuration(token, default):
     except:
         return token, default
 
-def getStickPolar(token, right_stick, prev_frame): #prev_frame is used to evaluate ! characters if it is not None
+#prev_frame is used to evaluate ! characters if it is not None
+#offset_from_row_index is used to evaluate @ characters if it is not None
+def getStickPolar(token, right_stick, prev_frame, offset_from_row_index):
     r = 1.0
     theta = 0.0
-    if prev_frame: #contains !
+    if prev_frame is not None: #contains !
         if right_stick: prev_stick = prev_frame.right_stick
         else: prev_stick = prev_frame.left_stick
     if ';' in token: #(r; theta)
         r_token = token[0:token.index(';')]
         theta_token = token[token.index(';') + 1:]
-        if prev_frame: r_token, theta_token = evaluateLast(r_token, prev_stick.r), evaluateLast(theta_token, prev_stick.theta)
+        if prev_frame is not None: r_token, theta_token = evaluateLast(r_token, prev_stick.r), evaluateLast(theta_token, prev_stick.theta)
+        if offset_from_row_index is not None: r_token, theta_token = evaluateCurrentFrame(r_token, offset_from_row_index), evaluateCurrentFrame(theta_token, offset_from_row_index)
         r, theta = float(r_token), float(theta_token)
     else:# (r)
-        if prev_frame: token = evaluateLast(token, prev_stick.theta)
+        if prev_frame is not None: token = evaluateLast(token, prev_stick.theta)
+        if offset_from_row_index is not None: token = evaluateCurrentFrame(token, offset_from_row_index)
         theta = float(token)
     return r, theta
-
-def getStickCoordsFromPolar(r, theta):
-    coords = Vector2f.zero()
-    coords.x = int(32767 * r * math.cos(theta)) / 32767.0 #snap to nearest 2^16-representable float
-    coords.y = int(32767 * r * math.sin(theta)) / 32767.0
-    return coords
-
-# def getStickCoordsOld(token):
-#     r, theta = getStickPolar(token)
-#     return getStickCoordsFromPolar(r, theta)
-
-# def getStick(token, right_stick, prev_frame):
-#     return Joystick.polar(getStickPolar(token, right_stick, prev_frame))
 
 #euler in degrees to rotation matrix
 def toRotationMatrix(euler:Vector3f):
@@ -325,7 +321,7 @@ def getGyroValues(token):
     return Gyro(euler, toRotationMatrix(euler), ang_vel)
 
 #parses token into subtokens
-def parseToken(token, indexWrite, duration):
+def parseToken(token, indexWrite, duration, rowIndex):
     print("Parsing: " + token)
     print("Write Index: " + str(indexWrite))
     
@@ -337,15 +333,20 @@ def parseToken(token, indexWrite, duration):
 
     if token[0] == '(' and token[-1] == ')': token = token[1 : -1] #remove enclosing parentheses
 
-    if "|" in token: parseSequence(token, indexWrite)
-    elif "/" in token: parseLoop(token, indexWrite, duration)
+    if "|" in token: parseSequence(token, indexWrite, rowIndex)
+    elif "/" in token: parseLoop(token, indexWrite, duration, rowIndex)
     elif "->" in token: parseInterpolatedStick(token, indexWrite, duration)
     else:
-        if duration >= 0: addToFrameRange(token, range(indexWrite, indexWrite + duration))
-        else: addToFrameRange(token, range(indexWrite - 1, indexWrite + duration - 1, -1))
+        if duration >= 0: addToFrameRange(token, range(indexWrite, indexWrite + duration), rowIndex)
+        else: addToFrameRange(token, range(indexWrite - 1, indexWrite + duration - 1, -1), rowIndex)
 
-#need to fix
 def parseInterpolatedStick(token, indexStart, duration):
+    if '@' in token:
+        print("Stick interpolation on line " + str(lineInNumber) + " cannot use @ symbol")
+        quit(-1)
+    if duration < 0:
+        print("Stick interpolation on line " + str(lineInNumber) + " cannot have negative duration")
+        quit(-1)
     if duration < 2:
         print("Stick interpolation on line " + str(lineInNumber) + " must have duration of at least 2")
         quit(-1)
@@ -385,14 +386,14 @@ def parseInterpolatedStick(token, indexStart, duration):
         if debug: print(e)
         quit(-1)
 
-def parseSequence(token, indexWrite):
+def parseSequence(token, indexWrite, rowIndex):
     steps = token.split('|')
     for i in range(len(steps)):
         subtoken, duration = parseDuration(steps[i], 1) #parse out duration
-        parseToken(subtoken, indexWrite, duration)
+        parseToken(subtoken, indexWrite, duration, rowIndex)
         indexWrite += duration
 
-def parseLoop(token, indexWrite, duration):
+def parseLoop(token, indexWrite, duration, rowIndex):
     if duration == 0:
         return
     elif duration < 0:
@@ -411,7 +412,7 @@ def parseLoop(token, indexWrite, duration):
         for i in range(len(steps)):
             if remainingDuration <= 0: return
             if durations[i] >= 0:
-                parseToken(subtokens[i], indexWrite, min(durations[i], remainingDuration))
+                parseToken(subtokens[i], indexWrite, min(durations[i], remainingDuration), rowIndex)
                 remainingDuration -= durations[i]
             else:
                 print("Negative durations are not permitted within loops")
@@ -419,7 +420,7 @@ def parseLoop(token, indexWrite, duration):
             indexWrite += durations[i]
 
 
-def addToFrameRange(token, frameRange:range):
+def addToFrameRange(token, frameRange:range, rowIndex):
     #first find start and end frames involved, add any additional frames as needed
     minFrame = maxFrame = 0
     for j in frameRange:
@@ -429,137 +430,140 @@ def addToFrameRange(token, frameRange:range):
         script.frames.append(Frame(j, False, 0, Joystick.zero(), Joystick.zero(), Vector3f.default_accel(), Vector3f.default_accel(), Gyro.zero(), Gyro.zero(), False))
 
     if frameRange.start < 0 or frameRange.stop < -1:
-        print("Negative durations go before frame 0")
+        print("Negative durations cannot go before frame 0")
         quit(-1) 
     
-    try:
-        if "(" in token: #stick/motion
-            right = True #True if right stick/gyro/etc.
-            left = True #True if left stick/gyro/etc.
-            if "r" in token:
-                left = False
-            if "l" in token:
-                right = False
-            prefix = token[0:token.index('(')]
-            token = token[token.index('(') + 1:token.index(')')]  
+    #try:
+    if "(" in token: #stick/motion
+        right = True #True if right stick/gyro/etc.
+        left = True #True if left stick/gyro/etc.
+        if "r" in token:
+            left = False
+        if "l" in token:
+            right = False
+        prefix = token[0:token.index('(')]
+        token = token[token.index('(') + 1:token.index(')')]  
 
-            if "s" in prefix: #stick
-                if '!' in token: #need to calculate each frame individually
-                    for j in frameRange:
-                        # print(str(j))
+        if "s" in prefix: #stick
+            previous_input_symbol = '!' in token
+            current_symbol = '@' in token
+            if previous_input_symbol or current_symbol: #need to calculate each frame individually
+                for j in frameRange:
+                    if previous_input_symbol:
                         if j - 1 < 0: prev_frame = blankFrame
                         else: prev_frame = script.frames[j - 1]
-                        coords = Joystick.polar(getStickPolar(token, right, prev_frame))
-                        if right: script.frames[j].right_stick = coords
-                        if left: script.frames[j].left_stick = coords
+                    else:
+                        prev_frame = None
+                    coords = Joystick.polar(getStickPolar(token, right, prev_frame, j - rowIndex))
+                    if right: script.frames[j].right_stick = coords
+                    if left: script.frames[j].left_stick = coords
+            else:
+                polar_coords = getStickPolar(token, right, None, None)
+                coords = Joystick.polar(polar_coords)
 
-                else:
-                    polar_coords = getStickPolar(token, right, None)
-                    coords = Joystick.polar(polar_coords)
+                for j in frameRange:
+                    if right: script.frames[j].right_stick = coords
+                    if left: script.frames[j].left_stick = coords
+        
+        elif "a" in prefix: #accelerometer
+            accel = Vector3f(*map(to_f2, map(float, token.split(";"))))
 
-                    for j in frameRange:
-                        if right: script.frames[j].right_stick = coords
-                        if left: script.frames[j].left_stick = coords
+            for j in frameRange:
+                if right: script.frames[j].accel_right = accel
+                if left: script.frames[j].accel_left = accel
+        
+        elif "g" in prefix: #gyroscope
+            gyro = getGyroValues(token)
+
+            for j in frameRange:
+                if right: script.frames[j].gyro_right = gyro
+                if left: script.frames[j].gyro_left = gyro
+
+    elif "m" in token: #motion macros
+        if delayed_motion: #shift backward by 1
+            newStart = frameRange.start - 1
+            while newStart < 0: newStart += frameRange.step
+            newStop = max(frameRange.stop - 1, -1)
+            frameRange = range(newStart, newStop, frameRange.step)
+
+        if not nxtas:
+            accel_left = Vector3f.default_accel()
+            accel_right = Vector3f.default_accel()
+            gyro_left = Gyro.zero()
+            gyro_right = Gyro.zero()
+            if token == "m" or token == "m-u":
+                accel_left = Vector3f(0, 3, 0)
+                gyro_left.ang_vel = Vector3f(-3, 0, 0)
+            elif token == "m-d":
+                accel_left = Vector3f(0, 3, 0)
+                gyro_left.ang_vel = Vector3f(3, 0, 0)
+            elif token == "m-l":
+                accel_left = Vector3f(-3, 0, 0)
+                gyro_left.ang_vel = Vector3f(0, 2, 0)
+            elif token == "m-r":
+                accel_left = Vector3f(3, 0, 0)
+                gyro_left.ang_vel = Vector3f(0, -2, 0)
+            elif token == "m-uu":
+                accel_left = accel_right = Vector3f(0, 3, 0)
+                gyro_left.ang_vel = gyro_right.ang_vel = Vector3f(-2, 0, 0)
+            elif token == "m-dd":
+                accel_left = accel_right = Vector3f(0, 3, 0)
+                gyro_left.ang_vel = gyro_right.ang_vel = Vector3f(2, 0, 0)
+            elif token == "m-ll":
+                accel_left = accel_right = Vector3f(-3, 0, 0)
+                gyro_left.ang_vel = gyro_right.ang_vel = Vector3f(0, 2, 0)
+            elif token == "m-rr":
+                accel_left = accel_right = Vector3f(3, 0, 0)
+                gyro_left.ang_vel = gyro_right.ang_vel = Vector3f(0, -2, 0)
+            else:
+                return
             
-            elif "a" in prefix: #accelerometer
-                accel = Vector3f(*map(to_f2, map(float, token.split(";"))))
+            for j in frameRange:
+                script.frames[j].accel_left, script.frames[j].accel_right = accel_left, accel_right
+                script.frames[j].gyro_left, script.frames[j].gyro_right = gyro_left, gyro_right
+                script.frames[j].macro = True
+        
+        else: #nx-tas motion keybinds
+            l_button = False
+            if token == "m": l_button = True
+            elif token == "m-u":
+                l_button = True
+                token = "dp-u"
+            elif token == "m-d":
+                l_button = True
+                token = "dp-d"
+            elif token == "m-l":
+                l_button = True
+                token = "dp-l"
+            elif token == "m-r":
+                l_button = True
+                token = "dp-r"
+            elif token == "m-uu": token = "dp-u"
+            elif token == "m-dd": token = "dp-d"
+            elif token == "m-ll": token = "dp-l"
+            elif token == "m-rr": token = "dp-r"
+            else:
+                return
 
+            if l_button:
                 for j in frameRange:
-                    if right: script.frames[j].accel_right = accel
-                    if left: script.frames[j].accel_left = accel
-            
-            elif "g" in prefix: #gyroscope
-                gyro = getGyroValues(token)
+                    script.frames[j].buttons |= 2**Button.cPadIdx_L.value[0]
 
-                for j in frameRange:
-                    if right: script.frames[j].gyro_right = gyro
-                    if left: script.frames[j].gyro_left = gyro
-
-        elif "m" in token: #motion macros
-            if delayed_motion: #shift backward by 1
-                newStart = frameRange.start - 1
-                while newStart < 0: newStart += frameRange.step
-                newStop = max(frameRange.stop - 1, -1)
-                frameRange = range(newStart, newStop, frameRange.step)
-
-            if not nxtas:
-                accel_left = Vector3f.default_accel()
-                accel_right = Vector3f.default_accel()
-                gyro_left = Gyro.zero()
-                gyro_right = Gyro.zero()
-                if token == "m" or token == "m-u":
-                    accel_left = Vector3f(0, 3, 0)
-                    gyro_left.ang_vel = Vector3f(-3, 0, 0)
-                elif token == "m-d":
-                    accel_left = Vector3f(0, 3, 0)
-                    gyro_left.ang_vel = Vector3f(3, 0, 0)
-                elif token == "m-l":
-                    accel_left = Vector3f(-3, 0, 0)
-                    gyro_left.ang_vel = Vector3f(0, 2, 0)
-                elif token == "m-r":
-                    accel_left = Vector3f(3, 0, 0)
-                    gyro_left.ang_vel = Vector3f(0, -2, 0)
-                elif token == "m-uu":
-                    accel_left = accel_right = Vector3f(0, 3, 0)
-                    gyro_left.ang_vel = gyro_right.ang_vel = Vector3f(-2, 0, 0)
-                elif token == "m-dd":
-                    accel_left = accel_right = Vector3f(0, 3, 0)
-                    gyro_left.ang_vel = gyro_right.ang_vel = Vector3f(2, 0, 0)
-                elif token == "m-ll":
-                    accel_left = accel_right = Vector3f(-3, 0, 0)
-                    gyro_left.ang_vel = gyro_right.ang_vel = Vector3f(0, 2, 0)
-                elif token == "m-rr":
-                    accel_left = accel_right = Vector3f(3, 0, 0)
-                    gyro_left.ang_vel = gyro_right.ang_vel = Vector3f(0, -2, 0)
-                else:
-                    return
-                
-                for j in frameRange:
-                    script.frames[j].accel_left, script.frames[j].accel_right = accel_left, accel_right
-                    script.frames[j].gyro_left, script.frames[j].gyro_right = gyro_left, gyro_right
-                    script.frames[j].macro = True
-            
-            else: #nx-tas motion keybinds
-                l_button = False
-                if token == "m": l_button = True
-                elif token == "m-u":
-                    l_button = True
-                    token = "dp-u"
-                elif token == "m-d":
-                    l_button = True
-                    token = "dp-d"
-                elif token == "m-l":
-                    l_button = True
-                    token = "dp-l"
-                elif token == "m-r":
-                    l_button = True
-                    token = "dp-r"
-                elif token == "m-uu": token = "dp-u"
-                elif token == "m-dd": token = "dp-d"
-                elif token == "m-ll": token = "dp-l"
-                elif token == "m-rr": token = "dp-r"
-                else:
-                    return
-
-                if l_button:
-                    for j in frameRange:
-                        script.frames[j].buttons |= 2**Button.cPadIdx_L.value[0]
-
-                #include dpad button
-                button_bin = getButtonBin(token)
-                for j in frameRange:
-                    script.frames[j].buttons |= button_bin
-
-
-        else: #button or comment/invalid
-            button_bin = getButtonBin(token)         
+            #include dpad button
+            button_bin = getButtonBin(token)
             for j in frameRange:
                 script.frames[j].buttons |= button_bin
 
-    except Exception as e:
-        print("Syntax error(s) on line " + str(lineInNumber) + " prevented script generation")
-        if debug: print(e)
-        quit(-1)
+
+    else: #button or comment/invalid
+        button_bin = getButtonBin(token)         
+        for j in frameRange:
+            script.frames[j].buttons |= button_bin
+
+    #except Exception as e:
+    #    print("Syntax error(s) on line " + str(lineInNumber) + " prevented script generation")
+    #    if debug: print(e)
+    #    quit(-1)
 
 blankFrame = Frame(0, False, 0, Joystick.zero(), Joystick.zero(), Vector3f.default_accel(), Vector3f.default_accel(), Gyro.zero(), Gyro.zero(), False)
 stage_name = ""
@@ -595,6 +599,7 @@ indexStop = 0
 vars = dict()
 
 with open(infile) as f:
+    prevLineInDuration = 1
     for lineIn in f:
         print(lineIn)
         lineIn = lineIn.split('\t')
@@ -642,13 +647,17 @@ with open(infile) as f:
                     continue
                 else:
                     try:
-                        lineInDuration = int(prepareToken(first, True, 0))
+                        lineInDuration = int(evaluateLast(prepareToken(first, True, 0), prevLineInDuration))
                     except:
                         lineInNumber += 1
                         continue
             else:
-                lineInNumber += 1
-                continue
+                try:
+                    print(first)
+                    lineInDuration = int(evaluateLast(first, prevLineInDuration))
+                except:
+                    lineInNumber += 1
+                    continue
         
         for i in range(1, len(lineIn)):
             if lineIn[i] == '':
@@ -662,10 +671,11 @@ with open(infile) as f:
             script.frame_count = len(script.frames) """
 
             print("Line duration: " + str(lineInDuration))
-            parseToken(token, indexStart, lineInDuration)
+            parseToken(token, indexStart, lineInDuration, indexStart)
 
         indexStart += lineInDuration
         lineInNumber += 1
+        prevLineInDuration = lineInDuration
 
     # blankFrame = Frame(0, False, 0, Joystick.zero(), Joystick.zero(), Vector3f.default_accel(), Vector3f.default_accel(), Gyro.zero(), Gyro.zero(), False)
 
