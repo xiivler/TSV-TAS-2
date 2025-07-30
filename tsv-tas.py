@@ -114,6 +114,8 @@ class Frame:
     step: int
     second_player: bool
     buttons: int
+    buttonsOn: int
+    buttonsOff: int
     left_stick: Joystick
     right_stick: Joystick
     accel_left: Vector3f
@@ -127,7 +129,7 @@ class Frame:
         dr = self.gyro_right.direction
         avl = self.gyro_left.ang_vel
         avr = self.gyro_right.ang_vel
-        values = [self.step, self.buttons, self.left_stick.r, self.left_stick.theta, self.left_stick.x, self.left_stick.y, self.right_stick.r, self.right_stick.theta, self.right_stick.x, self.right_stick.y,
+        values = [self.step, self.buttons, self.buttonsOn, self.buttonsOff, self.left_stick.r, self.left_stick.theta, self.left_stick.x, self.left_stick.y, self.right_stick.r, self.right_stick.theta, self.right_stick.x, self.right_stick.y,
         self.accel_left.x, self.accel_left.y, self.accel_left.z, self.accel_right.x, self.accel_right.y, self.accel_right.z,
         dl.xx, dl.xy, dl.xz, dl.yx, dl.yy, dl.yz, dl.zx, dl.zy, dl.zz, avl.x, avl.y, avl.z,
         dr.xx, dr.xy, dr.xz, dr.yx, dr.yy, dr.yz, dr.zx, dr.zy, dr.zz, avr.x, avr.y, avr.z]
@@ -341,7 +343,10 @@ def parseToken(token, indexWrite, duration, rowIndex, rowDuration):
     elif "/" in token: parseLoop(token, indexWrite, duration, rowIndex)
     elif "->" in token: parseInterpolatedStick(token, indexWrite, duration)
     else:
-        if duration >= 0: addToFrameRange(token, range(indexWrite, indexWrite + duration), rowIndex)
+        if duration == "?": print("? duration only allowed within sequences")
+        elif duration == "*": addToggle(token, indexWrite, True)
+        elif duration == 0: addToggle(token, indexWrite, False)
+        elif duration > 0: addToFrameRange(token, range(indexWrite, indexWrite + duration), rowIndex)
         else: addToFrameRange(token, range(indexWrite - 1, indexWrite + duration - 1, -1), rowIndex)
 
 def parseInterpolatedStick(token, indexStart, duration):
@@ -404,7 +409,9 @@ def parseSequence(token, indexWrite, rowIndex, rowDuration):
         indexWrite += duration
 
 def parseLoop(token, indexWrite, duration, rowIndex, rowDuration):
-    if duration == 0:
+    if duration == '*' or duration == '?':
+            print(duration + " not supported for durations within sequences (line " + str(lineInNumber) + ")")
+    elif duration == 0:
         return
     elif duration < 0:
         print("Loop on line " + str(lineInNumber) + " cannot have negative total duration")
@@ -437,7 +444,7 @@ def addToFrameRange(token, frameRange:range, rowIndex):
         if j > maxFrame: maxFrame = j
         if j < minFrame: minFrame = j
     for j in range(len(script.frames), maxFrame + 1):
-        script.frames.append(Frame(j, False, 0, Joystick.zero(), Joystick.zero(), Vector3f.default_accel(), Vector3f.default_accel(), Gyro.zero(), Gyro.zero(), False))
+        script.frames.append(Frame(j, False, 0, 0, 0, Joystick.zero(), Joystick.zero(), Vector3f.default_accel(), Vector3f.default_accel(), Gyro.zero(), Gyro.zero(), False))
 
     if frameRange.start < 0 or frameRange.stop < -1:
         print("Negative durations cannot go before frame 0")
@@ -575,7 +582,18 @@ def addToFrameRange(token, frameRange:range, rowIndex):
     #    if debug: print(e)
     #    quit(-1)
 
-blankFrame = Frame(0, False, 0, Joystick.zero(), Joystick.zero(), Vector3f.default_accel(), Vector3f.default_accel(), Gyro.zero(), Gyro.zero(), False)
+#add a toggle for a button to be on indefinitely until its next input in the script ([*]) or a toggle to switch such a button off ([0]) – but the program will actually fill in the frames later
+def addToggle(token, indexWrite, on):
+    try:
+        button_bin = getButtonBin(token)  
+        if on: script.frames[indexWrite].buttonsOn |= button_bin
+        else: script.frames[indexWrite].buttonsOff |= button_bin
+    except Exception as e:
+        print("Syntax error(s) on line " + str(lineInNumber) + " prevented script generation")
+        if debug: print(e)
+        quit(-1)
+
+blankFrame = Frame(0, False, 0, 0, 0, Joystick.zero(), Joystick.zero(), Vector3f.default_accel(), Vector3f.default_accel(), Gyro.zero(), Gyro.zero(), False)
 stage_name = ""
 entrance = ""
 scenario = 1
@@ -601,7 +619,7 @@ with open(infile) as f:
         script.frame_count += duration
     f.close()
 
-script.frames = [Frame(i, False, 0, Joystick.zero(), Joystick.zero(), Vector3f.default_accel(), Vector3f.default_accel(), Gyro.zero(), Gyro.zero(), False) for i in range(script.frame_count)]
+script.frames = [Frame(i, False, 0, 0, 0, Joystick.zero(), Joystick.zero(), Vector3f.default_accel(), Vector3f.default_accel(), Gyro.zero(), Gyro.zero(), False) for i in range(script.frame_count)]
 
 indexStart = 0
 indexStop = 0
@@ -687,6 +705,14 @@ with open(infile) as f:
         lineInNumber += 1
         prevLineInDuration = lineInDuration
 
+    # now that all the inputs have been parsed, go through again to process toggled buttons
+    buttonsOn = 0
+    for frame in script.frames:
+        buttonsOn |= frame.buttonsOn
+        buttonsOff = frame.buttons | frame.buttonsOff
+        buttonsOn &= ~buttonsOff
+        frame.buttons |= buttonsOn
+
     # blankFrame = Frame(0, False, 0, Joystick.zero(), Joystick.zero(), Vector3f.default_accel(), Vector3f.default_accel(), Gyro.zero(), Gyro.zero(), False)
 
     #calculate angular velocity if gyroscope and angular velocity are not independent, or calculate proper gyroscope if a motion macro is used
@@ -718,7 +744,7 @@ with open(infile) as f:
 if debug:
     debugFile = open(outfile + "-debug.csv", "w")
 
-    debugFile.write("Frame,Buttons,lx.r,ls.theta,ls.x,ls.y,rs.x,rs.y,la.x,la.y,la.z,ra.x,ra.y,ra.z,lg.r.xx,lg.r.xy,lg.r.xz,lg.r.yx,lg.r.yy,lg.r.yz,lg.r.zx,lg.r.zy,lg.r.zz,lg.v.x,lg.v.y,lg.v.z,rg.r.xx,rg.r.xy,rg.r.xz,rg.r.yx,rg.r.yy,rg.r.yz,rg.r.zx,rg.r.zy,rg.r.zz,rg.v.x,rg.v.y,rg.v.z\n")
+    debugFile.write("Frame,Buttons,ButtonsOn,ButtonsOff,lx.r,ls.theta,ls.x,ls.y,rs.x,rs.y,la.x,la.y,la.z,ra.x,ra.y,ra.z,lg.r.xx,lg.r.xy,lg.r.xz,lg.r.yx,lg.r.yy,lg.r.yz,lg.r.zx,lg.r.zy,lg.r.zz,lg.v.x,lg.v.y,lg.v.z,rg.r.xx,rg.r.xy,rg.r.xz,rg.r.yx,rg.r.yy,rg.r.yz,rg.r.zx,rg.r.zy,rg.r.zz,rg.v.x,rg.v.y,rg.v.z\n")
     for i in range(len(script.frames)):
         csv_writer = csv.writer(debugFile, delimiter = ',')
         data = script.frames[i].toStrArray()

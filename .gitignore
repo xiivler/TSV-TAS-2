@@ -3,3 +3,4 @@
 *.csv
 *.tas
 test.py
+.DS_Store
