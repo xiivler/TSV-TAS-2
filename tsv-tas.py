@@ -345,6 +345,8 @@ def parseToken(token, indexWrite, duration, rowIndex, rowDuration):
 
     if "|" in token: parseSequence(token, indexWrite, rowIndex, rowDuration)
     elif "/" in token: parseLoop(token, indexWrite, duration, rowIndex, rowDuration)
+    elif "&" in token:
+        for subtoken in token.split('&'): parseToken(subtoken, indexWrite, duration, rowIndex, rowDuration)
     elif "->" in token: parseInterpolatedStick(token, indexWrite, duration)
     else:
         if duration == "?": print("? duration only allowed within sequences")
@@ -439,7 +441,6 @@ def parseLoop(token, indexWrite, duration, rowIndex, rowDuration):
                 print("Negative durations are not permitted within loops")
                 quit(-1)
             indexWrite += durations[i]
-
 
 def addToFrameRange(token, frameRange:range, rowIndex):
     #first find start and end frames involved, add any additional frames as needed
