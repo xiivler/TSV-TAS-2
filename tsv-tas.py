@@ -243,17 +243,20 @@ def evaluateVariables(token, row_duration): #evaluates all variables of form $ o
 
 
 def evaluateMath(token, whole_token): #evaluates math expressions
+    while match_obj := re.search("\\/[ \\(]*\\.?[0-9]", token): #replace division / with ÷ to differentiate from loops
+        token = token.replace(match_obj.group(), match_obj.group().replace('/', '÷'))
     if whole_token: #match math expressions that take up the whole token
-        math_regex = "^(([0-9,\\. \\+\\*\\-\\(\\)])+([\\+\\*\\-])([0-9,\\. \\+\\*\\-\\(\\)])+)$"
+        math_regex = "^(([0-9,\\. \\+\\-\\*÷\\(\\)])+([\\+\\-\\*÷])([0-9,\\. \\+\\-\\*÷\\(\\)])+)$"
         group = 1
     else: #match math expressions that begin/end with parentheses, commas, brackets, or semicolons
-        math_regex = "([\\(\\,\\;\\[])(([0-9,\\. \\+\\*\\-\\(\\)])+([\\+\\*\\-])([0-9,\\. \\+\\*\\-\\(\\)])+)([\\)\\,\\;\\]])"
+        math_regex = "([\\(\\,\\;\\[])(([0-9,\\. \\+\\-\\*÷\\(\\)])+([\\+\\-\\*÷])([0-9,\\. \\+\\-\\*÷\\(\\)])+)([\\)\\,\\;\\]])"
         group = 2
-    # print("token before search: " + token)
+    print("token before search: " + token)
     while match_obj := re.search(math_regex, token): #evaluate math operations
-        #print(match_obj.group(group))
-        #print(eval(match_obj.group(group)))
-        token = token.replace(match_obj.group(group), str(eval(match_obj.group(group))))
+        print("Math match: " + match_obj.group(group))
+        print(match_obj.group(group).replace('÷', '/'))
+        #replace the math expression with its evaluation, first replacing ÷ with / so Python can evaluate the division
+        token = token.replace(match_obj.group(group), str(eval(match_obj.group(group).replace('÷', '/'))))
 
     return token.lower()
 
@@ -274,7 +277,8 @@ def parseDuration(token, default):
         if duration_str == '?' or duration_str == '*': #special duration characters
             duration = duration_str
         else:
-            duration = int(duration_str)
+            try: duration = int(float(duration_str)) #rounds down floats
+            except: print("Invalid local duration in row " + lineInNumber)
         token = token.replace(token[token.index('[') : token.index(']') + 1], '')
         return token.strip(), duration
     except:
@@ -340,7 +344,7 @@ def parseToken(token, indexWrite, duration, rowIndex, rowDuration):
     if len(token) > 0 and token[0] == '(' and token[-1] == ')': token = token[1 : -1] #remove enclosing parentheses
 
     if "|" in token: parseSequence(token, indexWrite, rowIndex, rowDuration)
-    elif "/" in token: parseLoop(token, indexWrite, duration, rowIndex)
+    elif "/" in token: parseLoop(token, indexWrite, duration, rowIndex, rowDuration)
     elif "->" in token: parseInterpolatedStick(token, indexWrite, duration)
     else:
         if duration == "?": print("? duration only allowed within sequences")
@@ -635,7 +639,7 @@ with open(infile) as f:
         #handle first token (duration or variable assignment)
         lineInDuration = 1
         first = lineIn[0].strip()
-        try: lineInDuration = int(first)
+        try: lineInDuration = int(float(first))
         except:
             if first == '':
                 pass
@@ -675,14 +679,14 @@ with open(infile) as f:
                     continue
                 else:
                     try:
-                        lineInDuration = int(evaluateLast(prepareToken(first, True, 0), prevLineInDuration))
+                        lineInDuration = int(float(evaluateLast(prepareToken(first, True, 0), prevLineInDuration)))
                     except:
                         lineInNumber += 1
                         continue
             else:
                 try:
                     print(first)
-                    lineInDuration = int(evaluateLast(first, prevLineInDuration))
+                    lineInDuration = int(float(evaluateLast(first, prevLineInDuration)))
                 except:
                     lineInNumber += 1
                     continue
