@@ -1,0 +1,6 @@
+*.tsv
+*.txt
+*.csv
+*.tas
+test.py
+.DS_Store
