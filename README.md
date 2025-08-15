@@ -1,22 +1,35 @@
 # TSV-TAS-2
-A version of TSV-TAS for use with SMO-TAS-Exlaunch
+TSV-TAS-2 is the latest compiler of TSV-TAS, a script format for TASing Super Mario Odyssey. Thanks to PlacidMink for contributions to the project.
+
+```tsv-tas.py``` takes a script in the TSV-TAS format and compiles it into either a binary file for LunaKit or a nx-TAS file for smo-practice.
+
+```nx-tas-to-tsv-tas.py``` converts nx-TAS scripts into TSV-TAS scripts.
 
 ## Writing TSV-TAS Scripts
-Read the tutorial [here](https://docs.google.com/document/d/1ISc4ruS5YADccNCZjTgZ7TY1t1tSs2IRAMCzMeFMatc/edit?usp=sharing).
+Read the documentation [here](https://docs.google.com/document/d/1vW-swF3k96YxaIJqXbtRXbQ54mKKgeWfPFlW2hYBa_Q/edit?usp=sharing).
 
-## Generating Output File for TAS Mod
-Make sure you have Python 3 installed.
+## Running the Compiler
+First, make sure you have Python 3 installed.
 
-### Local
-In the command line, navigate to the ```TSV-TAS-2``` directory and enter ```python3 tsv-tas.py [path to TSV file] [path to output file]```.
+In the command line, navigate to the ```TSV-TAS-2``` directory and enter ```python3 tsv-tas.py [options] [path to TSV or CSV file] [path to output file]```.
 
-### FTP
-If you want to send ouptut files to your Switch via FTP, first enter your FTP server configuration information in ```ftp_config.json```.
+By default, the output file will be a binary file that can be used with LunaKit.
 
-To generate and output file and send it to your Switch, in the command line, navigate to the ```TSV-TAS-2``` directory and enter ```python3 tsv-tas.py -f [path to TSV file] [name of output file]```. The file will be transferred to the `scripts` directory of your Switch's SD card and will also be generated in the ```TSV-TAS-2``` directory on your computer.
+### Options
+The following options can be used on the command line to customize the output:
 
-### Debugging
-If you would like to generate a debug CSV file displaying each frame of the generated output file, include the option ```-d``` before the path to the TSV file (```-fd``` if you also want to use the FTP feature). The debug file will be generated in the ```TSV-TAS-2``` directory.
+```-f``` FTP: Sends the output file to the directory ```SMO/tas/scripts``` on your Switch's SD card via FTP for use with LunaKit
+
+```-n``` nx-TAS: Generates a nx-TAS script file (for use with smo-practice) instead of a binary script file
+
+```-e``` Skip empty: Skips frames with no inputs in the output file to make the file smaller (currently only supported with nx-TAS scripts)
+
+```-d``` Debug: Generates a CSV file in the ```TSV-TAS-2``` directory showing how the program interprets each frame of your script for debugging purposes
+
+You can mix and match as many of the following options as you would like by writing all the letters after one hyphen. For example, you can run ```python3 tsv-tas.py -ne tas.tsv tas.txt``` to generate an nx-TAS file ```tas.txt``` that skips empty frames.
+
+### FTP Setup
+If you would like to send ouptut files to your Switch via FTP, first enter your FTP server configuration information in ```ftp_config.json```. Then, run the command ```python3 tsv-tas.py -f [path to TSV file] [name of output file]``` to send the file to the Switch's SD card.
 
 ## Converting nx-TAS to TSV-TAS
 To convert an nx-TAS script to a TSV-TAS script, in the command line, navigate to the ```TSV-TAS-2``` directory and enter ```python3 nx-tas-to-tsv-tas.py [path to nx-TAS file] [path to output file]```.

@@ -16,26 +16,37 @@ ftp = False
 debug = False
 nxtas = False
 remove_empty = False #won't work for lunakit/exlaunch format until mod treats y accel as -1
+same_path = False
 
-if (sys.argv[1][0] == '-'):
+if sys.argv[1][0] == '-':
     options = sys.argv[1]
-    infile = sys.argv[2]
-    outfile = sys.argv[3]
     ftp = "f" in options
     debug = "d" in options
     nxtas = "n" in options
     remove_empty = "e" in options
+    same_path = "p" in options
+    infile = sys.argv[2]
+    if not same_path:
+        outfile = sys.argv[3]
 
 else:
     infile = sys.argv[1]
-    outfile = sys.argv[2]
+    if not same_path:
+        outfile = sys.argv[2]
 
-stage_name = ""
-entrance = ""
-scenario = 1
+if infile.endswith(".tsv") or infile.endswith(".txt"):
+    separator = "\t"
+elif infile.endswith(".csv"):
+    separator = ","
+else:
+    sys.exit("Error: Invalid file type")
+
+if same_path:
+    outfile = infile[0:infile.rindex('.')]
+    if nxtas: outfile += ".txt"
 
 independent_gyro = False #if True, can set angular velocity independently of rotation, if False angular velocity calculated from rotation
-delayed_motion = False #if True, moves all motion macros 1f earlier
+motion_offset = 0 #shifts motion macros by this amount
 
 @dataclass
 class Vector2f:
@@ -78,6 +89,10 @@ class Joystick:
         r = r_theta[0]
         theta = r_theta[1]
         return Joystick(r, theta, int(32767 * r * math.cos(math.radians(theta))) / 32767.0, int(32767 * r * math.sin(math.radians(theta))) / 32767.0)
+    
+    @staticmethod
+    def cartesian(x, y): #note that with how polar rounds the r and theta may not generate the x and y
+        return Joystick(math.sqrt(x**2 + y**2), math.degrees(math.atan2(y, x)), x, y)
 
 @dataclass
 class Matrix33f:
@@ -129,7 +144,7 @@ class Frame:
         dr = self.gyro_right.direction
         avl = self.gyro_left.ang_vel
         avr = self.gyro_right.ang_vel
-        values = [self.step, self.buttons, self.buttonsOn, self.buttonsOff, self.left_stick.r, self.left_stick.theta, self.left_stick.x, self.left_stick.y, self.right_stick.r, self.right_stick.theta, self.right_stick.x, self.right_stick.y,
+        values = [self.step, self.second_player, self.buttons, self.buttonsOn, self.buttonsOff, self.left_stick.r, self.left_stick.theta, self.left_stick.x, self.left_stick.y, self.right_stick.r, self.right_stick.theta, self.right_stick.x, self.right_stick.y,
         self.accel_left.x, self.accel_left.y, self.accel_left.z, self.accel_right.x, self.accel_right.y, self.accel_right.z,
         dl.xx, dl.xy, dl.xz, dl.yx, dl.yy, dl.yz, dl.zx, dl.zy, dl.zz, avl.x, avl.y, avl.z,
         dr.xx, dr.xy, dr.xz, dr.yx, dr.yy, dr.yz, dr.zx, dr.zy, dr.zz, avr.x, avr.y, avr.z]
@@ -141,10 +156,32 @@ class Script:
     change_stage_name:str
     change_stage_id:str
     scenario_no:int
-    frame_count:int
     is_two_player:bool
     startPosition:Vector3f
     frames:list[Frame] = field(default_factory=list)
+    frames_P1:list[Frame] = field(default_factory=list)
+    frames_P2:list[Frame] = field(default_factory=list)
+
+    def getFrames(self, player_two):
+        if player_two: return self.frames_P2
+        else: return self.frames_P1
+
+    def addFrames(self, end): #add frames through frame end - 1
+        for j in range(len(self.frames_P1), end):
+            self.frames_P1.append(Frame(j, False, 0, 0, 0, Joystick.zero(), Joystick.zero(), Vector3f.default_accel(), Vector3f.default_accel(), Gyro.zero(), Gyro.zero(), False))
+        if self.is_two_player:
+            for j in range(len(self.frames_P2), end):
+                self.frames_P2.append(Frame(j, True, 0, 0, 0, Joystick.zero(), Joystick.zero(), Vector3f.default_accel(), Vector3f.default_accel(), Gyro.zero(), Gyro.zero(), False))
+
+    # merge player 1 and player 2 frames into one array called frames
+    def combineFrames(self):
+        if self.is_two_player:
+            self.frames = []
+            for j in range(0, len(self.frames_P1)):
+                self.frames.append(self.frames_P1[j])
+                self.frames.append(self.frames_P2[j])
+        else:
+            self.frames = self.frames_P1
 
 
 class Button(enum.Enum):
@@ -186,6 +223,7 @@ def to_f2(f4): #stores float with 2 byte precision if uncommented
 
 def getButtonBin(button):
     button = button.lower().strip()
+    if len(button) > 1 and button[0] == "c": button = button[1:] #2P button
     if button == "a": return 2**Button.cPadIdx_A.value[0]
     elif button == "b": return 2**Button.cPadIdx_B.value[0]
     elif button == "x": return 2**Button.cPadIdx_X.value[0]
@@ -234,8 +272,7 @@ def evaluateVariables(token, row_duration): #evaluates all variables of form $ o
         try:
             token = token.replace(match_obj.group(), vars.get(match_obj.group().lower()[1:]))
         except:
-            print("Variable " + match_obj.group() + " not found")
-            quit(-1)
+            sys.exit("Error: Variable " + match_obj.group() + " not found")
 
     token = token.replace('#', str(row_duration))
 
@@ -251,23 +288,21 @@ def evaluateMath(token, whole_token): #evaluates math expressions
     else: #match math expressions that begin/end with parentheses, commas, brackets, or semicolons
         math_regex = "([\\(\\,\\;\\[])(([0-9,\\. \\+\\-\\*÷\\(\\)])+([\\+\\-\\*÷])([0-9,\\. \\+\\-\\*÷\\(\\)])+)([\\)\\,\\;\\]])"
         group = 2
-    print("token before search: " + token)
-    while match_obj := re.search(math_regex, token): #evaluate math operations
-        print("Math match: " + match_obj.group(group))
-        print(match_obj.group(group).replace('÷', '/'))
-        #replace the math expression with its evaluation, first replacing ÷ with / so Python can evaluate the division
-        token = token.replace(match_obj.group(group), str(eval(match_obj.group(group).replace('÷', '/'))))
+    try:
+        while match_obj := re.search(math_regex, token): #evaluate math operations
+            #replace the math expression with its evaluation, first replacing ÷ with / so Python can evaluate the division
+            token = token.replace(match_obj.group(group), str(eval(match_obj.group(group).replace('÷', '/'))))
+    except:
+        pass #handles bad match groups with parentheses
 
     return token.lower()
 
 def evaluateLast(token, prev): #replaces any ! marks with prev, then calls evaluateMath
     token = token.replace('!', str(prev))
-    # print("Replaced token: " + token)
     return evaluateMath(token, True)
 
 def evaluateCurrentFrame(token, offset): #replaces any @ marks with offset, then calls evaluateMath
     token = token.replace('@', str(offset))
-    # print("Replaced token: " + token)
     return evaluateMath(token, True)
 
 #parses the duration of a token
@@ -278,7 +313,7 @@ def parseDuration(token, default):
             duration = duration_str
         else:
             try: duration = int(float(duration_str)) #rounds down floats
-            except: print("Invalid local duration in row " + lineInNumber)
+            except: sys.exit("Error: Invalid local duration in row " + lineInNumber)
         token = token.replace(token[token.index('[') : token.index(']') + 1], '')
         return token.strip(), duration
     except:
@@ -330,16 +365,35 @@ def getGyroValues(token):
     
     return Gyro(euler, toRotationMatrix(euler), ang_vel)
 
+# calculates needed angular velocities for all frames based on the gyroscope
+def calculateAngularVelocity(player_two):
+    euler_left_old, euler_right_old = script.getFrames(player_two)[0].gyro_left.euler, script.getFrames(player_two)[0].gyro_right.euler 
+    for i in range(1, len(script.getFrames(player_two))):
+        euler_left, euler_right = script.getFrames(player_two)[i].gyro_left.euler, script.getFrames(player_two)[i].gyro_right.euler
+        if not script.getFrames(player_two)[i].macro:
+            script.getFrames(player_two)[i].gyro_left.ang_vel = Vector3f(ANG_VEL_FACTOR*(euler_left.x - euler_left_old.x), ANG_VEL_FACTOR*(euler_left.y - euler_left_old.y), ANG_VEL_FACTOR*(euler_left.z - euler_left_old.z))
+            script.getFrames(player_two)[i].gyro_right.ang_vel = Vector3f(ANG_VEL_FACTOR*(euler_right.x - euler_right_old.x), ANG_VEL_FACTOR*(euler_right.y - euler_right_old.y), ANG_VEL_FACTOR*(euler_right.z - euler_right_old.z))
+        '''
+        else:
+            ang_vel_left, ang_vel_right = script.frames[i].gyro_left.ang_vel, script.frames[i].gyro_right.ang_vel
+            script.frames[i].gyro_left.euler = Vector3f(euler_left_old.x + ang_vel_left.x / ANG_VEL_FACTOR, euler_left_old.y + ang_vel_left.y / ANG_VEL_FACTOR, euler_left_old.z + ang_vel_left.z / ANG_VEL_FACTOR)
+            script.frames[i].gyro_right.euler = Vector3f(euler_right_old.x + ang_vel_right.x / ANG_VEL_FACTOR, euler_right_old.y + ang_vel_right.y / ANG_VEL_FACTOR, euler_right_old.z + ang_vel_right.z / ANG_VEL_FACTOR)
+            script.frames[i].gyro_left.direction = toRotationMatrix(script.frames[i].gyro_left.euler)
+            script.frames[i].gyro_right.direction = toRotationMatrix(script.frames[i].gyro_right.euler)
+        '''
+        euler_left_old, euler_right_old = euler_left, euler_right
+
 #parses token into subtokens
 def parseToken(token, indexWrite, duration, rowIndex, rowDuration):
-    print("Parsing: " + token)
-    print("Write Index: " + str(indexWrite))
+    if debug:
+        print("Parsing Token: " + token)
+        print("Write Index: " + str(indexWrite))
     
     token = token.strip()
     if re.search("^\\[[0-9]*\\] *\\(", token) or (not "|" in token and not "/" in token):
         token, duration = parseDuration(token, duration) #see if there is a duration associated with the token
     
-    print("Duration: " + str(duration))
+    if debug: print("Duration: " + str(duration))
 
     if len(token) > 0 and token[0] == '(' and token[-1] == ')': token = token[1 : -1] #remove enclosing parentheses
 
@@ -349,27 +403,25 @@ def parseToken(token, indexWrite, duration, rowIndex, rowDuration):
         for subtoken in token.split('&'): parseToken(subtoken, indexWrite, duration, rowIndex, rowDuration)
     elif "->" in token: parseInterpolatedStick(token, indexWrite, duration)
     else:
-        if duration == "?": print("? duration only allowed within sequences")
+        if duration == "?": sys.exit("Error: ? duration only allowed within sequences")
         elif duration == "*": addToggle(token, indexWrite, True)
         elif duration == 0: addToggle(token, indexWrite, False)
         elif duration > 0: addToFrameRange(token, range(indexWrite, indexWrite + duration), rowIndex)
         else: addToFrameRange(token, range(indexWrite - 1, indexWrite + duration - 1, -1), rowIndex)
 
 def parseInterpolatedStick(token, indexStart, duration):
-    if '@' in token:
-        print("Stick interpolation on line " + str(lineInNumber) + " cannot use @ symbol")
-        quit(-1)
-    if duration < 0:
-        print("Stick interpolation on line " + str(lineInNumber) + " cannot have negative duration")
-        quit(-1)
-    if duration < 2:
-        print("Stick interpolation on line " + str(lineInNumber) + " must have duration of at least 2")
-        quit(-1)
+    if '@' in token: sys.exit("Error: Stick interpolation on line " + str(lineInNumber) + " cannot use @ symbol")
+    if duration < 0: sys.exit("Error: Stick interpolation on line " + str(lineInNumber) + " cannot have negative duration")
+    if duration < 2: sys.exit("Error: Stick interpolation on line " + str(lineInNumber) + " must have duration of at least 2")
 
+    player_two = 'c' in token
+
+    #add frames as necessary
+    script.addFrames(indexStart + duration)
     indexStop = indexStart + duration
 
     if indexStart - 1 < 0: prev_frame = blankFrame
-    else: prev_frame = script.frames[indexStart - 1]
+    else: prev_frame = script.getFrames(player_two)[indexStart - 1]
     
     try:
         token1, token2 = token.split("->")
@@ -381,8 +433,8 @@ def parseInterpolatedStick(token, indexStart, duration):
         token1 = token1[token1.index('(') + 1:token1.index(')')]
         token2 = token2[token2.index('(') + 1:token2.index(')')]
 
-        r1, theta1 = getStickPolar(token1, right, prev_frame)
-        r2, theta2 = getStickPolar(token2, right, prev_frame)
+        r1, theta1 = getStickPolar(token1, right, prev_frame, None)
+        r2, theta2 = getStickPolar(token2, right, prev_frame, None)
 
         dr = (r2 - r1) / (duration - 1)
         dtheta = (theta2 - theta1) / (duration - 1)
@@ -390,38 +442,32 @@ def parseInterpolatedStick(token, indexStart, duration):
         r, theta = r1, theta1
 
         for i in range(indexStart, indexStop):
-            if right: script.frames[i].right_stick = Joystick.polar((r, theta))
-            else: script.frames[i].left_stick = Joystick.polar((r, theta))
+            if right: script.getFrames(player_two)[i].right_stick = Joystick.polar((r, theta))
+            else: script.getFrames(player_two)[i].left_stick = Joystick.polar((r, theta))
             r += dr
             theta += dtheta
-        if right: script.frames[indexStop - 1].right_stick = Joystick.polar((r2, theta2))
-        else: script.frames[indexStop - 1].left_stick = Joystick.polar((r2, theta2))
+        if right: script.getFrames(player_two)[indexStop - 1].right_stick = Joystick.polar((r2, theta2))
+        else: script.getFrames(player_two)[indexStop - 1].left_stick = Joystick.polar((r2, theta2))
     except Exception as e:
-        print("Syntax error(s) on line " + str(lineInNumber) + " prevented script generation")
         if debug: print(e)
-        quit(-1)
+        sys.exit("Error: Syntax error(s) on line " + str(lineInNumber) + " prevented script generation")
 
 def parseSequence(token, indexWrite, rowIndex, rowDuration):
     steps = token.split('|')
     for i in range(len(steps)):
         subtoken, duration = parseDuration(steps[i], 1) #parse out duration
         if duration == '*':
-            print("* not supported for durations within sequences (line " + str(lineInNumber) + ")")
+            sys.exit("Error: * not supported for durations within sequences (line " + str(lineInNumber) + ")")
         elif duration == '?':
-            print("row duration: " + str(rowDuration))
             duration = rowDuration + rowIndex - indexWrite
             if duration < 0: duration = 0
         parseToken(subtoken, indexWrite, duration, rowIndex, rowDuration)
         indexWrite += duration
 
 def parseLoop(token, indexWrite, duration, rowIndex, rowDuration):
-    if duration == '*' or duration == '?':
-            print(duration + " not supported for durations within sequences (line " + str(lineInNumber) + ")")
-    elif duration == 0:
-        return
-    elif duration < 0:
-        print("Loop on line " + str(lineInNumber) + " cannot have negative total duration")
-        quit(-1)
+    if duration == '*' or duration == '?': sys.exit(duration + " not supported for durations within sequences (line " + str(lineInNumber) + ")")
+    elif duration == 0: return
+    elif duration < 0: sys.exit("Error: Loop on line " + str(lineInNumber) + " cannot have negative total duration")
 
     remainingDuration = duration
     steps = token.split('/')
@@ -438,8 +484,7 @@ def parseLoop(token, indexWrite, duration, rowIndex, rowDuration):
                 parseToken(subtokens[i], indexWrite, min(durations[i], remainingDuration), rowIndex, rowDuration)
                 remainingDuration -= durations[i]
             else:
-                print("Negative durations are not permitted within loops")
-                quit(-1)
+                sys.exit("Error: Negative durations are not permitted within loops")
             indexWrite += durations[i]
 
 def addToFrameRange(token, frameRange:range, rowIndex):
@@ -448,183 +493,195 @@ def addToFrameRange(token, frameRange:range, rowIndex):
     for j in frameRange:
         if j > maxFrame: maxFrame = j
         if j < minFrame: minFrame = j
-    for j in range(len(script.frames), maxFrame + 1):
-        script.frames.append(Frame(j, False, 0, 0, 0, Joystick.zero(), Joystick.zero(), Vector3f.default_accel(), Vector3f.default_accel(), Gyro.zero(), Gyro.zero(), False))
-
-    if frameRange.start < 0 or frameRange.stop < -1:
-        print("Negative durations cannot go before frame 0")
-        quit(-1) 
+    script.addFrames(maxFrame + 1)
     
-    #try:
-    if "(" in token: #stick/motion
-        right = True #True if right stick/gyro/etc.
-        left = True #True if left stick/gyro/etc.
-        if "r" in token:
-            left = False
-        if "l" in token:
-            right = False
-        prefix = token[0:token.index('(')]
-        token = token[token.index('(') + 1:token.index(')')]  
+    if frameRange.start < 0 or frameRange.stop < -1:
+        sys.exit("Error: Negative durations cannot go before frame 0") 
+    
+    player_two = False
+    token = token.strip()
+    if len(token) > 0 and token[0] == "c":
+        player_two = True
+        token = token[1:] #get rid of the c
 
-        if "s" in prefix: #stick
-            previous_input_symbol = '!' in token
-            current_symbol = '@' in token
-            if previous_input_symbol or current_symbol: #need to calculate each frame individually
-                for j in frameRange:
-                    if previous_input_symbol:
-                        if j - 1 < 0: prev_frame = blankFrame
-                        else: prev_frame = script.frames[j - 1]
-                    else:
-                        prev_frame = None
-                    coords = Joystick.polar(getStickPolar(token, right, prev_frame, j - rowIndex))
-                    if right: script.frames[j].right_stick = coords
-                    if left: script.frames[j].left_stick = coords
-            else:
-                polar_coords = getStickPolar(token, right, None, None)
-                coords = Joystick.polar(polar_coords)
+    try:
+        if "(" in token: #stick/motion
+            right = True #True if right stick/gyro/etc.
+            left = True #True if left stick/gyro/etc.
+            if "r" in token:
+                left = False
+            if "l" in token:
+                right = False
+            prefix = token[0:token.index('(')]
+            token = token[token.index('(') + 1:token.rfind(')')]  
 
-                for j in frameRange:
-                    if right: script.frames[j].right_stick = coords
-                    if left: script.frames[j].left_stick = coords
-        
-        elif "a" in prefix: #accelerometer
-            accel = Vector3f(*map(to_f2, map(float, token.split(";"))))
-
-            for j in frameRange:
-                if right: script.frames[j].accel_right = accel
-                if left: script.frames[j].accel_left = accel
-        
-        elif "g" in prefix: #gyroscope
-            gyro = getGyroValues(token)
-
-            for j in frameRange:
-                if right: script.frames[j].gyro_right = gyro
-                if left: script.frames[j].gyro_left = gyro
-
-    elif "m" in token: #motion macros
-        if delayed_motion: #shift backward by 1
-            newStart = frameRange.start - 1
-            while newStart < 0: newStart += frameRange.step
-            newStop = max(frameRange.stop - 1, -1)
-            frameRange = range(newStart, newStop, frameRange.step)
-
-        if not nxtas:
-            accel_left = Vector3f.default_accel()
-            accel_right = Vector3f.default_accel()
-            gyro_left = Gyro.zero()
-            gyro_right = Gyro.zero()
-            if token == "m" or token == "m-u":
-                accel_left = Vector3f(0, 3, 0)
-                gyro_left.ang_vel = Vector3f(-3, 0, 0)
-            elif token == "m-d":
-                accel_left = Vector3f(0, 3, 0)
-                gyro_left.ang_vel = Vector3f(3, 0, 0)
-            elif token == "m-l":
-                accel_left = Vector3f(-3, 0, 0)
-                gyro_left.ang_vel = Vector3f(0, 2, 0)
-            elif token == "m-r":
-                accel_left = Vector3f(3, 0, 0)
-                gyro_left.ang_vel = Vector3f(0, -2, 0)
-            elif token == "m-uu":
-                accel_left = accel_right = Vector3f(0, 3, 0)
-                gyro_left.ang_vel = gyro_right.ang_vel = Vector3f(-2, 0, 0)
-            elif token == "m-dd":
-                accel_left = accel_right = Vector3f(0, 3, 0)
-                gyro_left.ang_vel = gyro_right.ang_vel = Vector3f(2, 0, 0)
-            elif token == "m-ll":
-                accel_left = accel_right = Vector3f(-3, 0, 0)
-                gyro_left.ang_vel = gyro_right.ang_vel = Vector3f(0, 2, 0)
-            elif token == "m-rr":
-                accel_left = accel_right = Vector3f(3, 0, 0)
-                gyro_left.ang_vel = gyro_right.ang_vel = Vector3f(0, -2, 0)
-            else:
-                return
+            if "s" in prefix: #stick
+                previous_input_symbol = '!' in token
+                current_symbol = '@' in token
+                if "x" in prefix:
+                    coords = Joystick.cartesian(int(token.split(";")[0])/32767, int(token.split(";")[1])/32767)
+                    for j in frameRange:
+                        if right: script.getFrames(player_two)[j].right_stick = coords
+                        if left: script.getFrames(player_two)[j].left_stick = coords
+                elif previous_input_symbol or current_symbol: #need to calculate each frame individually
+                    for j in frameRange:
+                        if previous_input_symbol:
+                            if j - 1 < 0: prev_frame = blankFrame
+                            else: prev_frame = script.getFrames(player_two)[j - 1]
+                        else:
+                            prev_frame = None
+                        coords = Joystick.polar(getStickPolar(token, right, prev_frame, j - rowIndex))
+                        if right: script.getFrames(player_two)[j].right_stick = coords
+                        if left: script.getFrames(player_two)[j].left_stick = coords
+                else:
+                    polar_coords = getStickPolar(token, right, None, None)
+                    coords = Joystick.polar(polar_coords)
+                    for j in frameRange:
+                        if right: script.getFrames(player_two)[j].right_stick = coords
+                        if left: script.getFrames(player_two)[j].left_stick = coords
             
-            for j in frameRange:
-                script.frames[j].accel_left, script.frames[j].accel_right = accel_left, accel_right
-                script.frames[j].gyro_left, script.frames[j].gyro_right = gyro_left, gyro_right
-                script.frames[j].macro = True
-        
-        else: #nx-tas motion keybinds
-            l_button = False
-            if token == "m": l_button = True
-            elif token == "m-u":
-                l_button = True
-                token = "dp-u"
-            elif token == "m-d":
-                l_button = True
-                token = "dp-d"
-            elif token == "m-l":
-                l_button = True
-                token = "dp-l"
-            elif token == "m-r":
-                l_button = True
-                token = "dp-r"
-            elif token == "m-uu": token = "dp-u"
-            elif token == "m-dd": token = "dp-d"
-            elif token == "m-ll": token = "dp-l"
-            elif token == "m-rr": token = "dp-r"
-            else:
-                return
+            elif "a" in prefix: #accelerometer
+                accel = Vector3f(*map(to_f2, map(float, token.split(";"))))
 
-            if l_button:
                 for j in frameRange:
-                    script.frames[j].buttons |= 2**Button.cPadIdx_L.value[0]
+                    if right: script.getFrames(player_two)[j].accel_right = accel
+                    if left: script.getFrames(player_two)[j].accel_left = accel
+            
+            elif "g" in prefix: #gyroscope
+                gyro = getGyroValues(token)
 
-            #include dpad button
-            button_bin = getButtonBin(token)
+                for j in frameRange:
+                    if right: script.getFrames(player_two)[j].gyro_right = gyro
+                    if left: script.getFrames(player_two)[j].gyro_left = gyro
+
+        elif token == "m" or "m-" in token: #motion macros
+            if motion_offset != 0: #shifting motion earlier or later
+                newStart = frameRange.start + motion_offset
+                while newStart < 0: newStart += frameRange.step
+                newStop = max(frameRange.stop + motion_offset, -1)
+                frameRange = range(newStart, newStop, frameRange.step)
+
+            if motion_offset > 0: #ensure there are still enough frames if motion is shifted later
+                minFrame = maxFrame = 0
+                for j in frameRange:
+                    if j > maxFrame: maxFrame = j
+                    if j < minFrame: minFrame = j
+                script.addFrames(maxFrame + 1)
+
+            if not nxtas:
+                accel_left = Vector3f.default_accel()
+                accel_right = Vector3f.default_accel()
+                gyro_left = Gyro.zero()
+                gyro_right = Gyro.zero()
+                if token == "m" or token == "m-u":
+                    accel_left = Vector3f(0, 3, 0)
+                    gyro_left.ang_vel = Vector3f(-3, 0, 0)
+                elif token == "m-d":
+                    accel_left = Vector3f(0, 3, 0)
+                    gyro_left.ang_vel = Vector3f(3, 0, 0)
+                elif token == "m-l":
+                    accel_left = Vector3f(-3, 0, 0)
+                    gyro_left.ang_vel = Vector3f(0, 2, 0)
+                elif token == "m-r":
+                    accel_left = Vector3f(3, 0, 0)
+                    gyro_left.ang_vel = Vector3f(0, -2, 0)
+                elif token == "m-uu":
+                    accel_left = accel_right = Vector3f(0, 3, 0)
+                    gyro_left.ang_vel = gyro_right.ang_vel = Vector3f(-2, 0, 0)
+                elif token == "m-dd":
+                    accel_left = accel_right = Vector3f(0, 3, 0)
+                    gyro_left.ang_vel = gyro_right.ang_vel = Vector3f(2, 0, 0)
+                elif token == "m-ll":
+                    accel_left = accel_right = Vector3f(-3, 0, 0)
+                    gyro_left.ang_vel = gyro_right.ang_vel = Vector3f(0, 2, 0)
+                elif token == "m-rr":
+                    accel_left = accel_right = Vector3f(3, 0, 0)
+                    gyro_left.ang_vel = gyro_right.ang_vel = Vector3f(0, -2, 0)
+                else:
+                    return
+                
+                for j in frameRange:
+                    script.getFrames(player_two)[j].accel_left, script.getFrames(player_two)[j].accel_right = accel_left, accel_right
+                    script.getFrames(player_two)[j].gyro_left, script.getFrames(player_two)[j].gyro_right = gyro_left, gyro_right
+                    script.getFrames(player_two)[j].macro = True
+            
+            else: #nx-tas motion keybinds
+                l_button = False
+                if token == "m": l_button = True
+                elif token == "m-u":
+                    l_button = True
+                    token = "dp-u"
+                elif token == "m-d":
+                    l_button = True
+                    token = "dp-d"
+                elif token == "m-l":
+                    l_button = True
+                    token = "dp-l"
+                elif token == "m-r":
+                    l_button = True
+                    token = "dp-r"
+                elif token == "m-uu": token = "dp-u"
+                elif token == "m-dd": token = "dp-d"
+                elif token == "m-ll": token = "dp-l"
+                elif token == "m-rr": token = "dp-r"
+                else:
+                    return
+
+                if l_button:
+                    for j in frameRange:
+                        script.getFrames(player_two)[j].buttons |= 2**Button.cPadIdx_L.value[0]
+
+                #include dpad button
+                button_bin = getButtonBin(token)
+                for j in frameRange:
+                    script.getFrames(player_two)[j].buttons |= button_bin
+
+
+        else: #button or comment/invalid
+            button_bin = getButtonBin(token)         
             for j in frameRange:
-                script.frames[j].buttons |= button_bin
+                script.getFrames(player_two)[j].buttons |= button_bin
 
-
-    else: #button or comment/invalid
-        button_bin = getButtonBin(token)         
-        for j in frameRange:
-            script.frames[j].buttons |= button_bin
-
-    #except Exception as e:
-    #    print("Syntax error(s) on line " + str(lineInNumber) + " prevented script generation")
-    #    if debug: print(e)
-    #    quit(-1)
+    except Exception as e:
+        if debug: print(e)
+        sys.exit("Syntax error(s) on line " + str(lineInNumber) + " prevented script generation")
 
 #add a toggle for a button to be on indefinitely until its next input in the script ([*]) or a toggle to switch such a button off ([0]) – but the program will actually fill in the frames later
 def addToggle(token, indexWrite, on):
     try:
-        button_bin = getButtonBin(token)  
-        if on: script.frames[indexWrite].buttonsOn |= button_bin
-        else: script.frames[indexWrite].buttonsOff |= button_bin
+        player_two = "c" in token
+        button_bin = getButtonBin(token)
+        script.addFrames(indexWrite + 1)
+        if on: script.getFrames(player_two)[indexWrite].buttonsOn |= button_bin
+        else: script.getFrames(player_two)[indexWrite].buttonsOff |= button_bin
     except Exception as e:
-        print("Syntax error(s) on line " + str(lineInNumber) + " prevented script generation")
         if debug: print(e)
-        quit(-1)
+        sys.exit("Syntax error(s) on line " + str(lineInNumber) + " prevented script generation")("Syntax error(s) on line " + str(lineInNumber) + " prevented script generation")
 
 blankFrame = Frame(0, False, 0, 0, 0, Joystick.zero(), Joystick.zero(), Vector3f.default_accel(), Vector3f.default_accel(), Gyro.zero(), Gyro.zero(), False)
-stage_name = ""
-entrance = ""
-scenario = 1
-is_two_player = False
 
-script = Script(stage_name, entrance, scenario, -1, False, Vector3f.zero())
+script = Script("", "", 1, False, Vector3f.zero())
 
-script.frame_count = 0
+num_frames = 0
 
 lineInNumber = 1
 
-#count frames
+#count frames roughly to initialize array
 with open(infile) as f:
     for lineIn in f:
         duration = 1
-        first = lineIn.split('\t')[0]
+        first = lineIn.split(separator)[0]
         try:duration = int(first)
         except:
             if first == '':
                 pass
             else:
                 continue
-        script.frame_count += duration
+        num_frames += duration
     f.close()
 
-script.frames = [Frame(i, False, 0, 0, 0, Joystick.zero(), Joystick.zero(), Vector3f.default_accel(), Vector3f.default_accel(), Gyro.zero(), Gyro.zero(), False) for i in range(script.frame_count)]
+script.frames_P1 = [Frame(i, False, 0, 0, 0, Joystick.zero(), Joystick.zero(), Vector3f.default_accel(), Vector3f.default_accel(), Gyro.zero(), Gyro.zero(), False) for i in range(num_frames)]
+if script.is_two_player: script.frames_P2 = [Frame(i, True, 0, 0, 0, Joystick.zero(), Joystick.zero(), Vector3f.default_accel(), Vector3f.default_accel(), Gyro.zero(), Gyro.zero(), False) for i in range(num_frames)]
 
 indexStart = 0
 indexStop = 0
@@ -634,15 +691,20 @@ vars = dict()
 with open(infile) as f:
     prevLineInDuration = 1
     for lineIn in f:
-        print(lineIn)
+        if debug: print(lineIn)
         lineIn = lineIn.split('\t')
         lineIn[-1] = lineIn[-1].strip()
+        
         #handle first token (duration or variable assignment)
         lineInDuration = 1
         first = lineIn[0].strip()
         try: lineInDuration = int(float(first))
         except:
-            if first == '':
+            if first == '*': #toggle on the buttons
+                lineInDuration = '*'
+            elif first == '?':
+                sys.exit("Error: ? duration only allowed within sequences")
+            elif first == '':
                 pass
             elif first[0] == '$': #variables
                 if '=' in first: #variable assignment
@@ -657,8 +719,7 @@ with open(infile) as f:
                     elif var == 'scen' or var == 'scenario':
                         try: script.scenario_no = int(value)
                         except:
-                            print("Invalid scenario number")
-                            quit(-1)
+                            sys.exit("Error: Invalid scenario number")
                     elif var == 'independent_gyro' or var == 'ind_gyro':
                         if value.lower() == 'true' or value.lower() == 't':
                             independent_gyro = True
@@ -668,9 +729,12 @@ with open(infile) as f:
                         script.startPosition.x = float(coords[0])
                         script.startPosition.y = float(coords[1])
                         script.startPosition.z = float(coords[2])
-                    elif var == 'delayed_motion':
+                    elif var == 'motion_offset':
+                        motion_offset = int(value)
+                    elif var == 'is2p' or var == 'is_two_player':
                         if value.lower() == 'true' or value.lower() == 't':
-                            delayed_motion = True
+                            script.is_two_player = True
+                            is_two_player = True
 
                     #other variables
                     else:
@@ -686,8 +750,7 @@ with open(infile) as f:
                         continue
             else:
                 try:
-                    print(first)
-                    lineInDuration = int(float(evaluateLast(first, prevLineInDuration)))
+                    lineInDuration = int(float(evaluateLast(prepareToken(first, True, 0), prevLineInDuration)))
                 except:
                     lineInNumber += 1
                     continue
@@ -699,57 +762,70 @@ with open(infile) as f:
             #perform all variable evaluation and as much math evaluation as possible
             token = prepareToken(lineIn[i], False, lineInDuration)
 
-            """ for i in range(script.frame_count, indexStop):
-                script.frames.append(Frame(i, False, 0, Vector2f.zero(), Vector2f.zero(), Vector3f.zero(), Vector3f.zero(), Gyro.zero(), Gyro.zero(), False))
-            script.frame_count = len(script.frames) """
-
-            print("Line duration: " + str(lineInDuration))
+            if debug: print("Line Duration: " + str(lineInDuration))
             parseToken(token, indexStart, lineInDuration, indexStart, lineInDuration)
 
+        if lineInDuration == '*': lineInDuration = 0
         indexStart += lineInDuration
         lineInNumber += 1
         prevLineInDuration = lineInDuration
 
+    # add empty frames to end of script as needed to reach the total number of frames
+    if not remove_empty:
+        script.addFrames(indexStart)
+
     # now that all the inputs have been parsed, go through again to process toggled buttons
     buttonsOn = 0
-    for frame in script.frames:
+    for frame in script.frames_P1:
         buttonsOn |= frame.buttonsOn
         buttonsOff = frame.buttons | frame.buttonsOff
         buttonsOn &= ~buttonsOff
         frame.buttons |= buttonsOn
+    if script.is_two_player:
+        for frame in script.frames_P2:
+            buttonsOn |= frame.buttonsOn
+            buttonsOff = frame.buttons | frame.buttonsOff
+            buttonsOn &= ~buttonsOff
+            frame.buttons |= buttonsOn
 
     # blankFrame = Frame(0, False, 0, Joystick.zero(), Joystick.zero(), Vector3f.default_accel(), Vector3f.default_accel(), Gyro.zero(), Gyro.zero(), False)
 
     #calculate angular velocity if gyroscope and angular velocity are not independent, or calculate proper gyroscope if a motion macro is used
     #angular velocity is change in gyroscope in degrees times -3/400
     if not independent_gyro:
-        euler_left_old, euler_right_old = script.frames[0].gyro_left.euler, script.frames[0].gyro_right.euler 
-        for i in range(1, script.frame_count):
-            euler_left, euler_right = script.frames[i].gyro_left.euler, script.frames[i].gyro_right.euler
-            if not script.frames[i].macro:
-                script.frames[i].gyro_left.ang_vel = Vector3f(ANG_VEL_FACTOR*(euler_left.x - euler_left_old.x), ANG_VEL_FACTOR*(euler_left.y - euler_left_old.y), ANG_VEL_FACTOR*(euler_left.z - euler_left_old.z))
-                script.frames[i].gyro_right.ang_vel = Vector3f(ANG_VEL_FACTOR*(euler_right.x - euler_right_old.x), ANG_VEL_FACTOR*(euler_right.y - euler_right_old.y), ANG_VEL_FACTOR*(euler_right.z - euler_right_old.z))
-            '''
-            else:
-                ang_vel_left, ang_vel_right = script.frames[i].gyro_left.ang_vel, script.frames[i].gyro_right.ang_vel
-                script.frames[i].gyro_left.euler = Vector3f(euler_left_old.x + ang_vel_left.x / ANG_VEL_FACTOR, euler_left_old.y + ang_vel_left.y / ANG_VEL_FACTOR, euler_left_old.z + ang_vel_left.z / ANG_VEL_FACTOR)
-                script.frames[i].gyro_right.euler = Vector3f(euler_right_old.x + ang_vel_right.x / ANG_VEL_FACTOR, euler_right_old.y + ang_vel_right.y / ANG_VEL_FACTOR, euler_right_old.z + ang_vel_right.z / ANG_VEL_FACTOR)
-                script.frames[i].gyro_left.direction = toRotationMatrix(script.frames[i].gyro_left.euler)
-                script.frames[i].gyro_right.direction = toRotationMatrix(script.frames[i].gyro_right.euler)
-            '''
-            euler_left_old, euler_right_old = euler_left, euler_right
+        calculateAngularVelocity(False)
+        if script.is_two_player:
+            calculateAngularVelocity(True)
 
-    #remove empty frames
-    if (remove_empty):
-        for i in range(script.frame_count - 1, -1, -1):
-            blankFrame.step = i
-            if blankFrame == script.frames[i]:
-                del script.frames[i]
+    #remove empty frames (in 2P, only remove if both are empty)
+    if remove_empty:
+        if script.is_two_player:
+            modelFrame_1P = modelFrame_2P = blankFrame
+            for i in range(len(script.frames_P1) - 1, -1, -1):
+                modelFrame_1P.step = modelFrame_2P.step = i
+                modelFrame_1P.buttonsOn = script.frames_P1[i].buttonsOn
+                modelFrame_1P.buttonsOff = script.frames_P1[i].buttonsOff
+                modelFrame_2P.buttonsOn = script.frames_P2[i].buttonsOn
+                modelFrame_2P.buttonsOff = script.frames_P2[i].buttonsOff
+                if modelFrame_1P == script.frames_P1[i] and modelFrame_2P == script.frames_P2[i]:
+                    del script.frames_P1[i]
+                    del script.frames_P2[i]
+        else:
+            modelFrame = blankFrame
+            for i in range(len(script.frames_P1) - 1, -1, -1):
+                modelFrame.step = i
+                modelFrame.buttonsOn = script.frames_P1[i].buttonsOn
+                modelFrame.buttonsOff = script.frames_P1[i].buttonsOff
+                if modelFrame == script.frames_P1[i]:
+                    del script.frames_P1[i]
+
+#write all 1P and 2P frames to the same array
+script.combineFrames()
 
 if debug:
     debugFile = open(outfile + "-debug.csv", "w")
 
-    debugFile.write("Frame,Buttons,ButtonsOn,ButtonsOff,lx.r,ls.theta,ls.x,ls.y,rs.x,rs.y,la.x,la.y,la.z,ra.x,ra.y,ra.z,lg.r.xx,lg.r.xy,lg.r.xz,lg.r.yx,lg.r.yy,lg.r.yz,lg.r.zx,lg.r.zy,lg.r.zz,lg.v.x,lg.v.y,lg.v.z,rg.r.xx,rg.r.xy,rg.r.xz,rg.r.yx,rg.r.yy,rg.r.yz,rg.r.zx,rg.r.zy,rg.r.zz,rg.v.x,rg.v.y,rg.v.z\n")
+    debugFile.write("Frame,2ndPlayer,Buttons,ButtonsOn,ButtonsOff,lx.r,ls.theta,ls.x,ls.y,rs.r,rs.theta,rs.x,rs.y,la.x,la.y,la.z,ra.x,ra.y,ra.z,lg.r.xx,lg.r.xy,lg.r.xz,lg.r.yx,lg.r.yy,lg.r.yz,lg.r.zx,lg.r.zy,lg.r.zz,lg.v.x,lg.v.y,lg.v.z,rg.r.xx,rg.r.xy,rg.r.xz,rg.r.yx,rg.r.yy,rg.r.yz,rg.r.zx,rg.r.zy,rg.r.zz,rg.v.x,rg.v.y,rg.v.z\n")
     for i in range(len(script.frames)):
         csv_writer = csv.writer(debugFile, delimiter = ',')
         data = script.frames[i].toStrArray()
@@ -766,7 +842,7 @@ if nxtas:
 else:
     outf = open(outfile, "wb")
     outf.write(b"BOOB")
-    outf.write(struct.pack("<I?3xi", len(script.frames), is_two_player, script.scenario_no))
+    outf.write(struct.pack("<I?3xi", len(script.frames), script.is_two_player, script.scenario_no))
     outf.write(bytes(script.change_stage_name, encoding="ascii") + b'\0'*(128-len(script.change_stage_name)))
     outf.write(bytes(script.change_stage_id, encoding="ascii") + b'\0'*(128-len(script.change_stage_id)))
     outf.write(struct.pack("<3f", script.startPosition.x, script.startPosition.y, script.startPosition.z))
@@ -797,7 +873,7 @@ if ftp:
 
     file = open(outfile, 'rb')
 
-    result = ftp.storbinary('STOR scripts/' + outfile, file)
+    result = ftp.storbinary('STOR SMO/tas/scripts/' + outfile, file)
     if result == '226 OK':
         print('Script successfully uploaded')
     else:
