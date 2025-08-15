@@ -22,7 +22,7 @@ The following options can be used on the command line to customize the output:
 
 ```-n``` nx-TAS: Generates a nx-TAS script file (for use with smo-practice) instead of a binary script file
 
-```-e``` Skip empty: Skips frames with no inputs in the output file to make the file smaller (currently only supported with nx-TAS scripts)
+```-e``` Skip empty (nx-TAS only): Skips frames with no inputs in the output file to make the file smaller (currently only supported for compiling nx-TAS scripts)
 
 ```-d``` Debug: Generates a CSV file in the ```TSV-TAS-2``` directory showing how the program interprets each frame of your script for debugging purposes
 
