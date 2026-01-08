@@ -24,6 +24,8 @@ The following options can be used on the command line to customize the output:
 
 ```-e``` Skip empty (nx-TAS only): Skips frames with no inputs in the output file to make the file smaller (currently only supported for compiling nx-TAS scripts)
 
+```-l``` Loop: Allows you to press enter to keep re-generating the script instead of rerunning the command
+
 ```-d``` Debug: Generates a CSV file in the ```TSV-TAS-2``` directory showing how the program interprets each frame of your script for debugging purposes
 
 You can mix and match as many of the following options as you would like by writing all the letters after one hyphen. For example, you can run ```python3 tsv-tas.py -ne tas.tsv tas.txt``` to generate an nx-TAS file ```tas.txt``` that skips empty frames.
