@@ -17,6 +17,7 @@ debug = False
 nxtas = False
 remove_empty = False #won't work for lunakit/exlaunch format until mod treats y accel as -1
 same_path = False
+loop = False
 
 if sys.argv[1][0] == '-':
     options = sys.argv[1]
@@ -25,6 +26,7 @@ if sys.argv[1][0] == '-':
     nxtas = "n" in options
     remove_empty = "e" in options
     same_path = "p" in options
+    loop = "l" in options
     infile = sys.argv[2]
     if not same_path:
         outfile = sys.argv[3]
@@ -265,6 +267,8 @@ def nxTAS_Buttons(buttons): #converts button int into string list of buttons for
     return ";".join(button_list)
 
 def prepareToken(token, first_column, row_duration):
+    if token[:2] == "//" or token[":2" == "\"//"]: #ignore comment
+        return ""
     return evaluateMath(evaluateVariables(token, row_duration), first_column)
 
 def evaluateVariables(token, row_duration): #evaluates all variables of form $ or #
@@ -658,225 +662,239 @@ def addToggle(token, indexWrite, on):
         if debug: print(e)
         sys.exit("Syntax error(s) on line " + str(lineInNumber) + " prevented script generation")("Syntax error(s) on line " + str(lineInNumber) + " prevented script generation")
 
-blankFrame = Frame(0, False, 0, 0, 0, Joystick.zero(), Joystick.zero(), Vector3f.default_accel(), Vector3f.default_accel(), Gyro.zero(), Gyro.zero(), False)
+do_once = True
 
-script = Script("", "", 1, False, Vector3f.zero())
+if loop:
+    print("Press enter to run command")
+    print("Type \"q\" and press enter to quit")
 
-num_frames = 0
+while (loop or do_once):
+    do_once = False
 
-lineInNumber = 1
+    if loop:
+        input_text = input()
+        if input_text == "q" or input_text == "quit" or input_text == "exit":
+            break
 
-#count frames roughly to initialize array
-with open(infile) as f:
-    for lineIn in f:
-        duration = 1
-        first = lineIn.split(separator)[0]
-        try:duration = int(first)
-        except:
-            if first == '':
-                pass
-            else:
-                continue
-        num_frames += duration
-    f.close()
+    blankFrame = Frame(0, False, 0, 0, 0, Joystick.zero(), Joystick.zero(), Vector3f.default_accel(), Vector3f.default_accel(), Gyro.zero(), Gyro.zero(), False)
 
-script.frames_P1 = [Frame(i, False, 0, 0, 0, Joystick.zero(), Joystick.zero(), Vector3f.default_accel(), Vector3f.default_accel(), Gyro.zero(), Gyro.zero(), False) for i in range(num_frames)]
-if script.is_two_player: script.frames_P2 = [Frame(i, True, 0, 0, 0, Joystick.zero(), Joystick.zero(), Vector3f.default_accel(), Vector3f.default_accel(), Gyro.zero(), Gyro.zero(), False) for i in range(num_frames)]
+    script = Script("", "", 1, False, Vector3f.zero())
 
-indexStart = 0
-indexStop = 0
+    num_frames = 0
 
-vars = dict()
+    lineInNumber = 1
 
-with open(infile) as f:
-    prevLineInDuration = 1
-    for lineIn in f:
-        if debug: print(lineIn)
-        lineIn = lineIn.split('\t')
-        lineIn[-1] = lineIn[-1].strip()
-        
-        #handle first token (duration or variable assignment)
-        lineInDuration = 1
-        first = lineIn[0].strip()
-        try: lineInDuration = int(float(first))
-        except:
-            if first == '*': #toggle on the buttons
-                lineInDuration = '*'
-            elif first == '?':
-                sys.exit("Error: ? duration only allowed within sequences")
-            elif first == '':
-                pass
-            elif first[0] == '$': #variables
-                if '=' in first: #variable assignment
-                    var = first[1:first.index('=')].strip().lower()
-                    value = first[first.index('=') + 1:].strip()
-
-                    #script start variables
-                    if var == 'stage':
-                        script.change_stage_name = value
-                    elif var == 'entr' or var == 'entrance':
-                        script.change_stage_id = value
-                    elif var == 'scen' or var == 'scenario':
-                        try: script.scenario_no = int(value)
-                        except:
-                            sys.exit("Error: Invalid scenario number")
-                    elif var == 'independent_gyro' or var == 'ind_gyro':
-                        if value.lower() == 'true' or value.lower() == 't':
-                            independent_gyro = True
-                    elif var == 'pos' or var == 'position':
-                        value = value[value.index('(') + 1:value.index(')')]
-                        coords = value.split(';')
-                        script.startPosition.x = float(coords[0])
-                        script.startPosition.y = float(coords[1])
-                        script.startPosition.z = float(coords[2])
-                    elif var == 'motion_offset':
-                        motion_offset = int(value)
-                    elif var == 'is2p' or var == 'is_two_player':
-                        if value.lower() == 'true' or value.lower() == 't':
-                            script.is_two_player = True
-                            is_two_player = True
-
-                    #other variables
-                    else:
-                        value = prepareToken(value, True, 0)
-                        vars.update({var: value})
-                    lineInNumber += 1
+    #count frames roughly to initialize array
+    with open(infile) as f:
+        for lineIn in f:
+            duration = 1
+            first = lineIn.split(separator)[0]
+            try:duration = int(first)
+            except:
+                if first == '':
+                    pass
+                else:
                     continue
+            num_frames += duration
+        f.close()
+
+    script.frames_P1 = [Frame(i, False, 0, 0, 0, Joystick.zero(), Joystick.zero(), Vector3f.default_accel(), Vector3f.default_accel(), Gyro.zero(), Gyro.zero(), False) for i in range(num_frames)]
+    if script.is_two_player: script.frames_P2 = [Frame(i, True, 0, 0, 0, Joystick.zero(), Joystick.zero(), Vector3f.default_accel(), Vector3f.default_accel(), Gyro.zero(), Gyro.zero(), False) for i in range(num_frames)]
+
+    indexStart = 0
+    indexStop = 0
+
+    vars = dict()
+
+    with open(infile) as f:
+        prevLineInDuration = 1
+        for lineIn in f:
+            if debug: print(lineIn)
+            lineIn = lineIn.split('\t')
+            lineIn[-1] = lineIn[-1].strip()
+            
+            #handle first token (duration or variable assignment)
+            lineInDuration = 1
+            first = lineIn[0].strip()
+            try: lineInDuration = int(float(first))
+            except:
+                if first == '*': #toggle on the buttons
+                    lineInDuration = '*'
+                elif first == '?':
+                    sys.exit("Error: ? duration only allowed within sequences")
+                elif first == '':
+                    pass
+                elif first[0] == '$': #variables
+                    if '=' in first: #variable assignment
+                        var = first[1:first.index('=')].strip().lower()
+                        value = first[first.index('=') + 1:].strip()
+
+                        #script start variables
+                        if var == 'stage':
+                            script.change_stage_name = value
+                        elif var == 'entr' or var == 'entrance':
+                            script.change_stage_id = value
+                        elif var == 'scen' or var == 'scenario':
+                            try: script.scenario_no = int(value)
+                            except:
+                                sys.exit("Error: Invalid scenario number")
+                        elif var == 'independent_gyro' or var == 'ind_gyro':
+                            if value.lower() == 'true' or value.lower() == 't':
+                                independent_gyro = True
+                        elif var == 'pos' or var == 'position':
+                            value = value[value.index('(') + 1:value.index(')')]
+                            coords = value.split(';')
+                            script.startPosition.x = float(coords[0])
+                            script.startPosition.y = float(coords[1])
+                            script.startPosition.z = float(coords[2])
+                        elif var == 'motion_offset':
+                            motion_offset = int(value)
+                        elif var == 'is2p' or var == 'is_two_player':
+                            if value.lower() == 'true' or value.lower() == 't':
+                                script.is_two_player = True
+                                is_two_player = True
+
+                        #other variables
+                        else:
+                            value = prepareToken(value, True, 0)
+                            vars.update({var: value})
+                        lineInNumber += 1
+                        continue
+                    else:
+                        try:
+                            lineInDuration = int(float(evaluateLast(prepareToken(first, True, 0), prevLineInDuration)))
+                        except:
+                            lineInNumber += 1
+                            continue
                 else:
                     try:
                         lineInDuration = int(float(evaluateLast(prepareToken(first, True, 0), prevLineInDuration)))
                     except:
                         lineInNumber += 1
                         continue
-            else:
-                try:
-                    lineInDuration = int(float(evaluateLast(prepareToken(first, True, 0), prevLineInDuration)))
-                except:
-                    lineInNumber += 1
+            
+            for i in range(1, len(lineIn)):
+                if lineIn[i] == '':
                     continue
-        
-        for i in range(1, len(lineIn)):
-            if lineIn[i] == '':
-                continue
 
-            #perform all variable evaluation and as much math evaluation as possible
-            token = prepareToken(lineIn[i], False, lineInDuration)
+                #perform all variable evaluation and as much math evaluation as possible
+                token = prepareToken(lineIn[i], False, lineInDuration)
 
-            if debug: print("Line Duration: " + str(lineInDuration))
-            parseToken(token, indexStart, lineInDuration, indexStart, lineInDuration)
+                if debug: print("Line Duration: " + str(lineInDuration))
+                parseToken(token, indexStart, lineInDuration, indexStart, lineInDuration)
 
-        if lineInDuration == '*': lineInDuration = 0
-        indexStart += lineInDuration
-        lineInNumber += 1
-        prevLineInDuration = lineInDuration
+            if lineInDuration == '*': lineInDuration = 0
+            indexStart += lineInDuration
+            lineInNumber += 1
+            prevLineInDuration = lineInDuration
 
-    # add empty frames to end of script as needed to reach the total number of frames
-    if not remove_empty:
-        script.addFrames(indexStart)
+        # add empty frames to end of script as needed to reach the total number of frames
+        if not remove_empty:
+            script.addFrames(indexStart)
 
-    # now that all the inputs have been parsed, go through again to process toggled buttons
-    buttonsOn = 0
-    for frame in script.frames_P1:
-        buttonsOn |= frame.buttonsOn
-        buttonsOff = frame.buttons | frame.buttonsOff
-        buttonsOn &= ~buttonsOff
-        frame.buttons |= buttonsOn
-    if script.is_two_player:
-        for frame in script.frames_P2:
+        # now that all the inputs have been parsed, go through again to process toggled buttons
+        buttonsOn = 0
+        for frame in script.frames_P1:
             buttonsOn |= frame.buttonsOn
             buttonsOff = frame.buttons | frame.buttonsOff
             buttonsOn &= ~buttonsOff
             frame.buttons |= buttonsOn
-
-    # blankFrame = Frame(0, False, 0, Joystick.zero(), Joystick.zero(), Vector3f.default_accel(), Vector3f.default_accel(), Gyro.zero(), Gyro.zero(), False)
-
-    #calculate angular velocity if gyroscope and angular velocity are not independent, or calculate proper gyroscope if a motion macro is used
-    #angular velocity is change in gyroscope in degrees times -3/400
-    if not independent_gyro:
-        calculateAngularVelocity(False)
         if script.is_two_player:
-            calculateAngularVelocity(True)
+            for frame in script.frames_P2:
+                buttonsOn |= frame.buttonsOn
+                buttonsOff = frame.buttons | frame.buttonsOff
+                buttonsOn &= ~buttonsOff
+                frame.buttons |= buttonsOn
 
-    #remove empty frames (in 2P, only remove if both are empty)
-    if remove_empty:
-        if script.is_two_player:
-            modelFrame_1P = modelFrame_2P = blankFrame
-            for i in range(len(script.frames_P1) - 1, -1, -1):
-                modelFrame_1P.step = modelFrame_2P.step = i
-                modelFrame_1P.buttonsOn = script.frames_P1[i].buttonsOn
-                modelFrame_1P.buttonsOff = script.frames_P1[i].buttonsOff
-                modelFrame_2P.buttonsOn = script.frames_P2[i].buttonsOn
-                modelFrame_2P.buttonsOff = script.frames_P2[i].buttonsOff
-                if modelFrame_1P == script.frames_P1[i] and modelFrame_2P == script.frames_P2[i]:
-                    del script.frames_P1[i]
-                    del script.frames_P2[i]
-        else:
-            modelFrame = blankFrame
-            for i in range(len(script.frames_P1) - 1, -1, -1):
-                modelFrame.step = i
-                modelFrame.buttonsOn = script.frames_P1[i].buttonsOn
-                modelFrame.buttonsOff = script.frames_P1[i].buttonsOff
-                if modelFrame == script.frames_P1[i]:
-                    del script.frames_P1[i]
+        # blankFrame = Frame(0, False, 0, Joystick.zero(), Joystick.zero(), Vector3f.default_accel(), Vector3f.default_accel(), Gyro.zero(), Gyro.zero(), False)
 
-#write all 1P and 2P frames to the same array
-script.combineFrames()
+        #calculate angular velocity if gyroscope and angular velocity are not independent, or calculate proper gyroscope if a motion macro is used
+        #angular velocity is change in gyroscope in degrees times -3/400
+        if not independent_gyro:
+            calculateAngularVelocity(False)
+            if script.is_two_player:
+                calculateAngularVelocity(True)
 
-if debug:
-    debugFile = open(outfile + "-debug.csv", "w")
+        #remove empty frames (in 2P, only remove if both are empty)
+        if remove_empty:
+            if script.is_two_player:
+                modelFrame_1P = modelFrame_2P = blankFrame
+                for i in range(len(script.frames_P1) - 1, -1, -1):
+                    modelFrame_1P.step = modelFrame_2P.step = i
+                    modelFrame_1P.buttonsOn = script.frames_P1[i].buttonsOn
+                    modelFrame_1P.buttonsOff = script.frames_P1[i].buttonsOff
+                    modelFrame_2P.buttonsOn = script.frames_P2[i].buttonsOn
+                    modelFrame_2P.buttonsOff = script.frames_P2[i].buttonsOff
+                    if modelFrame_1P == script.frames_P1[i] and modelFrame_2P == script.frames_P2[i]:
+                        del script.frames_P1[i]
+                        del script.frames_P2[i]
+            else:
+                modelFrame = blankFrame
+                for i in range(len(script.frames_P1) - 1, -1, -1):
+                    modelFrame.step = i
+                    modelFrame.buttonsOn = script.frames_P1[i].buttonsOn
+                    modelFrame.buttonsOff = script.frames_P1[i].buttonsOff
+                    if modelFrame == script.frames_P1[i]:
+                        del script.frames_P1[i]
 
-    debugFile.write("Frame,2ndPlayer,Buttons,ButtonsOn,ButtonsOff,lx.r,ls.theta,ls.x,ls.y,rs.r,rs.theta,rs.x,rs.y,la.x,la.y,la.z,ra.x,ra.y,ra.z,lg.r.xx,lg.r.xy,lg.r.xz,lg.r.yx,lg.r.yy,lg.r.yz,lg.r.zx,lg.r.zy,lg.r.zz,lg.v.x,lg.v.y,lg.v.z,rg.r.xx,rg.r.xy,rg.r.xz,rg.r.yx,rg.r.yy,rg.r.yz,rg.r.zx,rg.r.zy,rg.r.zz,rg.v.x,rg.v.y,rg.v.z\n")
-    for i in range(len(script.frames)):
-        csv_writer = csv.writer(debugFile, delimiter = ',')
-        data = script.frames[i].toStrArray()
-        csv_writer.writerow(data)
-    debugFile.close()
+    #write all 1P and 2P frames to the same array
+    script.combineFrames()
 
-if nxtas:
-    outf = open(outfile, "w")
-    for frame in script.frames:
-        outf.write(str(frame.step) + " " + nxTAS_Buttons(frame.buttons) + " "
-                   + str(int(frame.left_stick.x * 32767)) + ";" + str(int(frame.left_stick.y * 32767)) + " "
-                   + str(int(frame.right_stick.x * 32767)) + ";" + str(int(frame.right_stick.y * 32767)) + '\n')
+    if debug:
+        debugFile = open(outfile + "-debug.csv", "w")
 
-else:
-    outf = open(outfile, "wb")
-    outf.write(b"BOOB")
-    outf.write(struct.pack("<I?3xi", len(script.frames), script.is_two_player, script.scenario_no))
-    outf.write(bytes(script.change_stage_name, encoding="ascii") + b'\0'*(128-len(script.change_stage_name)))
-    outf.write(bytes(script.change_stage_id, encoding="ascii") + b'\0'*(128-len(script.change_stage_id)))
-    outf.write(struct.pack("<3f", script.startPosition.x, script.startPosition.y, script.startPosition.z))
+        debugFile.write("Frame,2ndPlayer,Buttons,ButtonsOn,ButtonsOff,lx.r,ls.theta,ls.x,ls.y,rs.r,rs.theta,rs.x,rs.y,la.x,la.y,la.z,ra.x,ra.y,ra.z,lg.r.xx,lg.r.xy,lg.r.xz,lg.r.yx,lg.r.yy,lg.r.yz,lg.r.zx,lg.r.zy,lg.r.zz,lg.v.x,lg.v.y,lg.v.z,rg.r.xx,rg.r.xy,rg.r.xz,rg.r.yx,rg.r.yy,rg.r.yz,rg.r.zx,rg.r.zy,rg.r.zz,rg.v.x,rg.v.y,rg.v.z\n")
+        for i in range(len(script.frames)):
+            csv_writer = csv.writer(debugFile, delimiter = ',')
+            data = script.frames[i].toStrArray()
+            csv_writer.writerow(data)
+        debugFile.close()
 
-    for frame in script.frames:
-        outf.write(struct.pack("<I?3xI", frame.step, frame.second_player, frame.buttons))
-        outf.write(struct.pack("<2f", frame.left_stick.x, frame.left_stick.y))
-        outf.write(struct.pack("<2f", frame.right_stick.x, frame.right_stick.y))
-        outf.write(struct.pack("<3f", frame.accel_left.x, frame.accel_left.y, frame.accel_left.z))
-        outf.write(struct.pack("<3f", frame.accel_right.x, frame.accel_right.y, frame.accel_right.z))
-        outf.write(struct.pack("<9f", frame.gyro_left.direction.xx, frame.gyro_left.direction.xy, frame.gyro_left.direction.xz, frame.gyro_left.direction.yx, frame.gyro_left.direction.yy, frame.gyro_left.direction.yz, frame.gyro_left.direction.zx, frame.gyro_left.direction.zy, frame.gyro_left.direction.zz))
-        outf.write(struct.pack("<3f", frame.gyro_left.ang_vel.x, frame.gyro_left.ang_vel.y, frame.gyro_left.ang_vel.z))
-        outf.write(struct.pack("<9f", frame.gyro_right.direction.xx, frame.gyro_right.direction.xy, frame.gyro_right.direction.xz, frame.gyro_right.direction.yx, frame.gyro_right.direction.yy, frame.gyro_right.direction.yz, frame.gyro_right.direction.zx, frame.gyro_right.direction.zy, frame.gyro_right.direction.zz))
-        outf.write(struct.pack("<3f", frame.gyro_right.ang_vel.x, frame.gyro_right.ang_vel.y, frame.gyro_right.ang_vel.z))
+    if nxtas:
+        outf = open(outfile, "w")
+        for frame in script.frames:
+            outf.write(str(frame.step) + " " + nxTAS_Buttons(frame.buttons) + " "
+                    + str(int(frame.left_stick.x * 32767)) + ";" + str(int(frame.left_stick.y * 32767)) + " "
+                    + str(int(frame.right_stick.x * 32767)) + ";" + str(int(frame.right_stick.y * 32767)) + '\n')
 
-outf.close()
-
-print('Script successfully generated')
-
-if ftp:
-    ftp_config_file = open('ftp_config.json')
-    ftp_config = json.load(ftp_config_file)
-    ftp_config_file.close
-
-    ftp = FTP()
-    ftp.connect(host=ftp_config['ip'], port=int(ftp_config['port']))
-    ftp.login(user=ftp_config['user'],passwd=ftp_config['passwd'])
-
-    file = open(outfile, 'rb')
-
-    result = ftp.storbinary('STOR SMO/tas/scripts/' + outfile, file)
-    if result == '226 OK':
-        print('Script successfully uploaded')
     else:
-        print('FTP error')
+        outf = open(outfile, "wb")
+        outf.write(b"BOOB")
+        outf.write(struct.pack("<I?3xi", len(script.frames), script.is_two_player, script.scenario_no))
+        outf.write(bytes(script.change_stage_name, encoding="ascii") + b'\0'*(128-len(script.change_stage_name)))
+        outf.write(bytes(script.change_stage_id, encoding="ascii") + b'\0'*(128-len(script.change_stage_id)))
+        outf.write(struct.pack("<3f", script.startPosition.x, script.startPosition.y, script.startPosition.z))
 
-    ftp.quit()
+        for frame in script.frames:
+            outf.write(struct.pack("<I?3xI", frame.step, frame.second_player, frame.buttons))
+            outf.write(struct.pack("<2f", frame.left_stick.x, frame.left_stick.y))
+            outf.write(struct.pack("<2f", frame.right_stick.x, frame.right_stick.y))
+            outf.write(struct.pack("<3f", frame.accel_left.x, frame.accel_left.y, frame.accel_left.z))
+            outf.write(struct.pack("<3f", frame.accel_right.x, frame.accel_right.y, frame.accel_right.z))
+            outf.write(struct.pack("<9f", frame.gyro_left.direction.xx, frame.gyro_left.direction.xy, frame.gyro_left.direction.xz, frame.gyro_left.direction.yx, frame.gyro_left.direction.yy, frame.gyro_left.direction.yz, frame.gyro_left.direction.zx, frame.gyro_left.direction.zy, frame.gyro_left.direction.zz))
+            outf.write(struct.pack("<3f", frame.gyro_left.ang_vel.x, frame.gyro_left.ang_vel.y, frame.gyro_left.ang_vel.z))
+            outf.write(struct.pack("<9f", frame.gyro_right.direction.xx, frame.gyro_right.direction.xy, frame.gyro_right.direction.xz, frame.gyro_right.direction.yx, frame.gyro_right.direction.yy, frame.gyro_right.direction.yz, frame.gyro_right.direction.zx, frame.gyro_right.direction.zy, frame.gyro_right.direction.zz))
+            outf.write(struct.pack("<3f", frame.gyro_right.ang_vel.x, frame.gyro_right.ang_vel.y, frame.gyro_right.ang_vel.z))
+
+    outf.close()
+
+    print('Script successfully generated')
+
+    if ftp:
+        ftp_config_file = open('ftp_config.json')
+        ftp_config = json.load(ftp_config_file)
+        ftp_config_file.close
+
+        ftp = FTP()
+        ftp.connect(host=ftp_config['ip'], port=int(ftp_config['port']))
+        ftp.login(user=ftp_config['user'],passwd=ftp_config['passwd'])
+
+        file = open(outfile, 'rb')
+
+        result = ftp.storbinary('STOR SMO/tas/scripts/' + outfile, file)
+        if result == '226 OK':
+            print('Script successfully uploaded')
+        else:
+            print('FTP error')
+
+        ftp.quit()
