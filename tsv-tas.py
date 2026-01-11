@@ -267,7 +267,7 @@ def nxTAS_Buttons(buttons): #converts button int into string list of buttons for
     return ";".join(button_list)
 
 def prepareToken(token, first_column, row_duration):
-    if token[:2] == "//" or token[":2" == "\"//"]: #ignore comment
+    if token[:2] == "//" or token[:2] == "\"//": #ignore comment
         return ""
     return evaluateMath(evaluateVariables(token, row_duration), first_column)
 
