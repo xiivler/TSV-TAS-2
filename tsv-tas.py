@@ -1544,10 +1544,10 @@ while loop or do_once:
 
         # reset every controller state
         writeCmdController(
-            outf, 0, int(0).to_bytes(7, "little"), Joystick(0, 0), Joystick(0, 0)
+            outf, 0, int(0).to_bytes(7, "little"), Joystick.zero(), Joystick.zero()
         )
         writeCmdController(
-            outf, 1, int(0).to_bytes(7, "little"), Joystick(0, 0), Joystick(0, 0)
+            outf, 1, int(0).to_bytes(7, "little"), Joystick.zero(), Joystick.zero()
         )
         writeCmdMotion(outf, 0, 2, Vector3f.zero(), Vector3f.zero())
         writeCmdMotion(outf, 1, 2, Vector3f.zero(), Vector3f.zero())
