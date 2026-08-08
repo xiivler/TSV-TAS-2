@@ -157,11 +157,14 @@ class Joystick:
             int(32767 * r * math.cos(math.radians(theta))),
             int(32767 * r * math.sin(math.radians(theta))),
         )
-    
+
     @staticmethod
-    def cartesian(x, y): #note that with how polar rounds the r and theta may not generate the x and y
-        return Joystick(math.sqrt(x**2 + y**2) / 32767, math.degrees(math.atan2(y, x)), x, y)
-    
+    def cartesian(x, y):
+        # note that with how polar rounds the r and theta may not generate the x and y
+        return Joystick(
+            math.sqrt(x**2 + y**2) / 32767, math.degrees(math.atan2(y, x)), x, y
+        )
+
     def __eq__(self, other):
         return self.x == other.x and self.y == other.y
 
@@ -258,7 +261,7 @@ class Frame:
             avr.x,
             avr.y,
             avr.z,
-            script.commands[self.step]
+            script.commands[self.step],
         ]
         return map(str, values)
 
@@ -929,7 +932,9 @@ def addToFrameRange(token, frameRange: range, rowIndex):
                 previous_input_symbol = "!" in token
                 current_symbol = "@" in token
                 if "x" in prefix:
-                    coords = Joystick.cartesian(int(token.split(";")[0]), int(token.split(";")[1]))
+                    coords = Joystick.cartesian(
+                        int(token.split(";")[0]), int(token.split(";")[1])
+                    )
                     for j in frameRange:
                         if right:
                             script.getFrames(player_two)[j].right_stick = coords
@@ -1128,17 +1133,17 @@ def eulerToQuat(euler_deg: Vector3f) -> Quat4f:
     euler.x = math.radians(euler_deg.x)
     euler.y = math.radians(euler_deg.y)
     euler.z = math.radians(euler_deg.z)
-    cy = math.cos(euler.y / 2);
-    sy = math.sin(euler.y / 2);
-    cp = math.cos(euler.z / 2);
-    sp = math.sin(euler.z / 2);
-    cr = math.cos(euler.x / 2);
-    sr = math.sin(euler.x / 2);
+    cy = math.cos(euler.y / 2)
+    sy = math.sin(euler.y / 2)
+    cp = math.cos(euler.z / 2)
+    sp = math.sin(euler.z / 2)
+    cr = math.cos(euler.x / 2)
+    sr = math.sin(euler.x / 2)
 
-    quat.w = cr * cp * cy + sr * sp * sy;
-    quat.x = sr * cp * cy - cr * sp * sy;
-    quat.z = cr * sp * cy + sr * cp * sy;
-    quat.y = cr * cp * sy - sr * sp * cy;
+    quat.w = cr * cp * cy + sr * sp * sy
+    quat.x = sr * cp * cy - cr * sp * sy
+    quat.z = cr * sp * cy + sr * cp * sy
+    quat.y = cr * cp * sy - sr * sp * cy
 
     return quat
 
@@ -1183,6 +1188,10 @@ def writeCmdMotion(
     writeCommand(file, 2, 0x1C, data)
 
 
+def writeCmdSaveFile(file:FileIO,id:int,reload:bool) -> None:
+    data:bytes = struct.pack("<b?",id,reload)
+    writeCommand(file,0xC000,0x2,data)
+
 def writeCmdGo(
     file: FileIO,
     scenario: int,
@@ -1205,6 +1214,22 @@ def writeCmdTp(file: FileIO, pos: Vector3f, rot: Quat4f, isCap: bool) -> None:
     data += struct.pack("<4f", rot.x, rot.y, rot.z, rot.w)
     writeCommand(file, 0xC003 if isCap else 0xC002, 0xC + 0x10, data)
 
+
+def writeCmdAbsStick(file: FileIO, enable: bool) -> None:
+    data: bytes = struct.pack("<?", enable)
+    data += struct.pack("<3x")
+    writeCommand(file, 0xC004, 0x4, data)
+
+
+def writeCmdSpeedup(file: FileIO, speed: int) -> None:
+    data: bytes = struct.pack("<b", speed)
+    data += struct.pack("<3x")
+    writeCommand(file, 0xC005, 0x4, data)
+
+def writeCmdDemo(file:FileIO, enable: bool) -> None: 
+    data:bytes = struct.pack("<?",enable)
+    data += struct.pack("<3x")
+    writeCommand(file,0xc007,0x4,data)
 
 def align_up(value, alignment):
     return ((value + alignment - 1) // alignment) * alignment
@@ -1375,8 +1400,9 @@ while loop or do_once:
                         except:
                             lineInNumber += 1
                             continue
-                elif first[0] == "/" and first[1] != "/": # commands
-                    script.addFrames(indexStart + 1)
+                elif first[0] == "/" and first[1] != "/":  # commands
+                    for _ in range(len(script.commands), indexStart + 1):
+                        script.commands.append([])
                     script.commands[indexStart].append(first[1:])
                     lineInNumber += 1
                     continue
@@ -1504,10 +1530,12 @@ while loop or do_once:
             [[Vector3f.zero(), Vector3f.zero()], [Vector3f.zero(), Vector3f.zero()]],
             [[Vector3f.zero(), Vector3f.zero()], [Vector3f.zero(), Vector3f.zero()]],
         ]
-        prevController: list[list[object]] = [ # player, button/left joystick/right joystick
-            [0, Joystick.zero(), Joystick.zero()],
-            [0, Joystick.zero(), Joystick.zero()],
-        ]
+        prevController: list[list[object]] = (
+            [  # player, button/left joystick/right joystick
+                [0, Joystick.zero(), Joystick.zero()],
+                [0, Joystick.zero(), Joystick.zero()],
+            ]
+        )
 
         outf = cast(FileIO, open(outfile, "wb"))
         # File Header
@@ -1525,12 +1553,26 @@ while loop or do_once:
         size += outf.write(
             struct.pack("<8B", 2, 2 if script.is_two_player else 0, 0, 0, 0, 0, 0, 0)
         )  # Controller types per player
-        size += outf.write(struct.pack("<H", 0))  # Author Length
-        size += outf.write(struct.pack("<I", 0))  # Title Length
-        size += outf.write(struct.pack("<I", 0))  # Description Length
 
+        author = b"TSV-TAS-2\x00"
+        size += outf.write(struct.pack("<H", len(author)))  # Author Length
+        size += outf.write(author)  # Author
         align = align_up(size, 4)
-        outf.write(struct.pack(f"<{align-size}x"))
+        size += outf.write(struct.pack(f"<{align-size}x"))
+
+        # title = b"TSV-TAS-2 Script\x00"
+        title = bytes(infile.split("/")[-1], "utf-8")
+        title += b"\x00"
+        size += outf.write(struct.pack("<I", len(title)))  # Title Length
+        size += outf.write(title)
+        align = align_up(size, 4)
+        size += outf.write(struct.pack(f"<{align-size}x"))
+
+        desc = b"Description from TSV-TAS-2\x00"
+        size += outf.write(struct.pack("<I", len(desc)))  # Description Length
+        size += outf.write(desc)
+        align = align_up(size, 4)
+        size += outf.write(struct.pack(f"<{align-size}x"))
 
         if script.change_stage_name:
             writeCmdGo(
@@ -1554,7 +1596,7 @@ while loop or do_once:
 
         for frame in script.frames:
             # print(f"{frame.step}, {prevFrame}")
-            if frame.step > prevFrame: #do only for 1P frames
+            if frame.step > prevFrame:  # do only for 1P frames
                 prevFrame = frame.step
                 writeCmdFrame(outf, frame.step)
                 if frame.step == 0 and (
@@ -1563,8 +1605,8 @@ while loop or do_once:
                     or script.startPosition.z != 0
                 ):
                     writeCmdTp(outf, script.startPosition, Quat4f.unit(), False)
-                # parse commands
-                for command_str in script.commands[frame.step]: # this relies on every step being included but that is okay
+                # parse commands, this relies on every step being included but that is okay
+                for command_str in script.commands[frame.step]:
                     tokens = command_str.split(" ")
                     command = tokens[0]
                     if debug:
@@ -1580,22 +1622,64 @@ while loop or do_once:
                                     if len(tokens) == 5:
                                         euler.y = float(tokens[4])
                                     elif len(tokens) == 7:
-                                        euler.x, euler.y, euler.z = map(float, tokens[4:7])
+                                        euler.x, euler.y, euler.z = map(
+                                            float, tokens[4:7]
+                                        )
                                     quat = eulerToQuat(euler)
                                 elif len(tokens) == 8:
-                                    quat.x, quat.y, quat.z, quat.w = map(float, tokens[4:8])
+                                    quat.x, quat.y, quat.z, quat.w = map(
+                                        float, tokens[4:8]
+                                    )
                                 writeCmdTp(outf, Vector3f(x, y, z), quat, isCap)
                                 if debug:
                                     print("Quat: " + str(quat))
                             except:
-                                sys.exit(f"Error: /{command} coordinates must be numbers")
+                                sys.exit(
+                                    f"Error: /{command} coordinates must be numbers"
+                                )
                         else:
                             sys.exit(f"Error: incorrect number of args for /{command}")
-
+                    elif command == "absStick":
+                        if len(tokens) == 2:
+                            enable: bool = tokens[1] in ["true", "1", "on", "y", "yes"]
+                            writeCmdAbsStick(outf, enable)
+                        else:
+                            sys.exit(f"Error: incorrect number of args for /{command}")
+                    elif command == "speed":
+                        if len(tokens) == 2:
+                            speed: int = int(tokens[1])
+                            if speed > 10 or speed < 1:
+                                sys.exit(
+                                    f"Error: speed has to be between 1 and 10 inclusive"
+                                )
+                            writeCmdSpeedup(outf, speed)
+                        else:
+                            sys.exit(f"Error: incorrect number of args for /{command}")
+                    elif command == "pause":
+                        if len(tokens) == 1:
+                            writeCommand(outf, 0xC006, 0, b"")
+                        else:
+                            sys.exit(f"Error: incorrect number of args for /{command}")
+                    elif command == "loadFile": 
+                        if len(tokens) == 2:
+                            writeCmdSaveFile(outf,int(tokens[1]),False)
+                        else:
+                            sys.exit(f"Error: incorrect number of args for /{command}")
+                    elif command == "reloadFile": 
+                        if len(tokens) == 1:
+                            writeCmdSaveFile(outf,0,True)
+                        else:
+                            sys.exit(f"Error: incorrect number of args for /{command}")
+                    elif command == "demo":
+                        if len(tokens) == 2:
+                            enable: bool = tokens[1] in ["true", "1", "on", "y", "yes"]
+                            writeCmdDemo(outf, enable)
+                        else:
+                            sys.exit(f"Error: incorrect number of args for /{command}")
             # only write controller inputs if they differ
             if (prevController[frame.second_player][0] != frame.buttons) or (
-                prevController[frame.second_player][1] != frame.left_stick or
-                prevController[frame.second_player][2] != frame.right_stick
+                prevController[frame.second_player][1] != frame.left_stick
+                or prevController[frame.second_player][2] != frame.right_stick
             ):
                 writeCmdController(
                     outf,
@@ -1605,9 +1689,18 @@ while loop or do_once:
                     frame.right_stick,
                 )
                 if debug:
-                    print("Wrote frame " + str(frame.step) + ", P2: " + str(frame.second_player))
-            
-            prevController[frame.second_player] = [frame.buttons, frame.left_stick, frame.right_stick]
+                    print(
+                        "Wrote frame "
+                        + str(frame.step)
+                        + ", P2: "
+                        + str(frame.second_player)
+                    )
+
+            prevController[frame.second_player] = [
+                frame.buttons,
+                frame.left_stick,
+                frame.right_stick,
+            ]
 
             if (vec3fNEQ0(frame.accel_left) or vec3fNEQ0(frame.gyro_left.ang_vel)) or (
                 vec3fNEQ0(prevMotion[frame.second_player][0][0])
