@@ -1148,9 +1148,13 @@ def eulerToQuat(euler_deg: Vector3f) -> Quat4f:
     return quat
 
 
-def writeCommand(file: FileIO, type: int, size: int, data: bytes) -> None:
+def align_up(value, alignment):
+    return ((value + alignment - 1) // alignment) * alignment
+
+
+def writeCommand(file: FileIO, type: int, data: bytes) -> None:
     file.write(struct.pack("<H", type))
-    file.write(size.to_bytes(6, "little"))
+    file.write(len(data).to_bytes(6, "little"))
     file.write(data)
 
 
@@ -1158,7 +1162,7 @@ def writeCmdFrame(file: FileIO, frame: int) -> None:
     data: bytes = frame.to_bytes(4, "little")
     # print(f"CmdFrame: {frame}")
 
-    writeCommand(file, 0, 4, data)
+    writeCommand(file, 0, data)
 
 
 def writeCmdController(
@@ -1172,7 +1176,7 @@ def writeCmdController(
     data += right.y.to_bytes(4, "little", signed=True)
     # print(f"CmdController: {player}, {bin(int.from_bytes(buttons,"little"))}, {left.x}, {left.y}, {right.x}, {right.y}")
 
-    writeCommand(file, 1, 0x18, data)
+    writeCommand(file, 1, data)
 
 
 def writeCmdMotion(
@@ -1185,12 +1189,12 @@ def writeCmdMotion(
     data += struct.pack("<3f", gyro.x, gyro.y, gyro.z)
     # print(f"CmdMotion: {player}, {controllerID}, {accel.x}, {accel.y}, {accel.z}, {gyro.x}, {gyro.y}, {gyro.z}")
 
-    writeCommand(file, 2, 0x1C, data)
+    writeCommand(file, 2, data)
 
 
 def writeCmdSaveFile(file:FileIO,id:int,reload:bool) -> None:
     data:bytes = struct.pack("<b?",id,reload)
-    writeCommand(file,0xC000,0x2,data)
+    writeCommand(file,0xC000,data)
 
 def writeCmdGo(
     file: FileIO,
@@ -1203,36 +1207,36 @@ def writeCmdGo(
     data: bytes = struct.pack("<BB?x", scenario, subScenario, returnPrev)
     data += (len(stageName) + 1).to_bytes(2, "little")
     data += bytes(stageName, "utf-8") + b"\x00"
+    size = len(data)
+    data += struct.pack(f"{align_up(size,4)-size}x")
     data += (len(entr) + 1).to_bytes(2, "little")
     data += bytes(entr, "utf-8") + b"\x00"
 
-    writeCommand(file, 0xC001, 8 + len(stageName) + 1 + len(entr) + 1, data)
+    writeCommand(file, 0xC001, data)
 
 
 def writeCmdTp(file: FileIO, pos: Vector3f, rot: Quat4f, isCap: bool) -> None:
     data: bytes = struct.pack("<3f", pos.x, pos.y, pos.z)
     data += struct.pack("<4f", rot.x, rot.y, rot.z, rot.w)
-    writeCommand(file, 0xC003 if isCap else 0xC002, 0xC + 0x10, data)
+    writeCommand(file, 0xC003 if isCap else 0xC002, data)
 
 
 def writeCmdAbsStick(file: FileIO, enable: bool) -> None:
     data: bytes = struct.pack("<?", enable)
     data += struct.pack("<3x")
-    writeCommand(file, 0xC004, 0x4, data)
+    writeCommand(file, 0xC004, data)
 
 
 def writeCmdSpeedup(file: FileIO, speed: int) -> None:
     data: bytes = struct.pack("<b", speed)
     data += struct.pack("<3x")
-    writeCommand(file, 0xC005, 0x4, data)
+    writeCommand(file, 0xC005, data)
 
 def writeCmdDemo(file:FileIO, enable: bool) -> None: 
     data:bytes = struct.pack("<?",enable)
     data += struct.pack("<3x")
-    writeCommand(file,0xc007,0x4,data)
+    writeCommand(file,0xc007,data)
 
-def align_up(value, alignment):
-    return ((value + alignment - 1) // alignment) * alignment
 
 
 do_once = True
