@@ -273,6 +273,9 @@ class Script:
     scenario_no: int
     is_two_player: bool
     startPosition: Vector3f
+    title: str = infile.split("/")[-1]
+    author: str = "TSV-TAS-2"
+    description: str = "Description from TSV-TAS-2"
     frames: list[Frame] = field(default_factory=list)
     frames_P1: list[Frame] = field(default_factory=list)
     frames_P2: list[Frame] = field(default_factory=list)
@@ -1192,9 +1195,10 @@ def writeCmdMotion(
     writeCommand(file, 2, data)
 
 
-def writeCmdSaveFile(file:FileIO,id:int,reload:bool) -> None:
-    data:bytes = struct.pack("<b?",id,reload)
-    writeCommand(file,0xC000,data)
+def writeCmdSaveFile(file: FileIO, id: int, reload: bool) -> None:
+    data: bytes = struct.pack("<b?", id, reload)
+    writeCommand(file, 0xC000, data)
+
 
 def writeCmdGo(
     file: FileIO,
@@ -1232,11 +1236,16 @@ def writeCmdSpeedup(file: FileIO, speed: int) -> None:
     data += struct.pack("<3x")
     writeCommand(file, 0xC005, data)
 
-def writeCmdDemo(file:FileIO, enable: bool) -> None: 
-    data:bytes = struct.pack("<?",enable)
-    data += struct.pack("<3x")
-    writeCommand(file,0xc007,data)
 
+def writeCmdDemo(file: FileIO, enable: bool) -> None:
+    data: bytes = struct.pack("<?", enable)
+    data += struct.pack("<3x")
+    writeCommand(file, 0xC007, data)
+
+
+def writeCmdSection(file: FileIO, taser: str) -> None:
+    data: bytes = bytes(taser, "utf-8") + b"\x00"
+    writeCommand(file, 0xC008, data)
 
 
 do_once = True
@@ -1378,6 +1387,12 @@ while loop or do_once:
                             script.startPosition.x = float(coords[0])
                             script.startPosition.y = float(coords[1])
                             script.startPosition.z = float(coords[2])
+                        elif var == "title":
+                            script.title = value
+                        elif var == "author":
+                            script.author = value
+                        elif var == "desc" or var == "description":
+                            script.description = value
                         elif var == "motion_offset":
                             motion_offset = int(value)
                         elif var == "ls_offset":
@@ -1558,21 +1573,19 @@ while loop or do_once:
             struct.pack("<8B", 2, 2 if script.is_two_player else 0, 0, 0, 0, 0, 0, 0)
         )  # Controller types per player
 
-        author = b"TSV-TAS-2\x00"
+        author = bytes(script.author, "utf-8") + b"\x00"
         size += outf.write(struct.pack("<H", len(author)))  # Author Length
         size += outf.write(author)  # Author
         align = align_up(size, 4)
         size += outf.write(struct.pack(f"<{align-size}x"))
 
-        # title = b"TSV-TAS-2 Script\x00"
-        title = bytes(infile.split("/")[-1], "utf-8")
-        title += b"\x00"
+        title = bytes(script.title, "utf-8") + b"\x00"
         size += outf.write(struct.pack("<I", len(title)))  # Title Length
         size += outf.write(title)
         align = align_up(size, 4)
         size += outf.write(struct.pack(f"<{align-size}x"))
 
-        desc = b"Description from TSV-TAS-2\x00"
+        desc = bytes(script.description, "utf-8") + b"\x00"
         size += outf.write(struct.pack("<I", len(desc)))  # Description Length
         size += outf.write(desc)
         align = align_up(size, 4)
@@ -1645,8 +1658,14 @@ while loop or do_once:
                             sys.exit(f"Error: incorrect number of args for /{command}")
                     elif command == "absStick":
                         if len(tokens) == 2:
-                            enable: bool = tokens[1] in ["true", "1", "on", "y", "yes"]
-                            writeCmdAbsStick(outf, enable)
+                            absStickEnable: bool = tokens[1] in [
+                                "true",
+                                "1",
+                                "on",
+                                "y",
+                                "yes",
+                            ]
+                            writeCmdAbsStick(outf, absStickEnable)
                         else:
                             sys.exit(f"Error: incorrect number of args for /{command}")
                     elif command == "speed":
@@ -1661,23 +1680,35 @@ while loop or do_once:
                             sys.exit(f"Error: incorrect number of args for /{command}")
                     elif command == "pause":
                         if len(tokens) == 1:
-                            writeCommand(outf, 0xC006, 0, b"")
+                            writeCommand(outf, 0xC006, b"")
                         else:
                             sys.exit(f"Error: incorrect number of args for /{command}")
-                    elif command == "loadFile": 
+                    elif command == "loadFile":
                         if len(tokens) == 2:
-                            writeCmdSaveFile(outf,int(tokens[1]),False)
+                            writeCmdSaveFile(outf, int(tokens[1]), False)
                         else:
                             sys.exit(f"Error: incorrect number of args for /{command}")
-                    elif command == "reloadFile": 
+                    elif command == "reloadFile":
                         if len(tokens) == 1:
-                            writeCmdSaveFile(outf,0,True)
+                            writeCmdSaveFile(outf, 0, True)
                         else:
                             sys.exit(f"Error: incorrect number of args for /{command}")
                     elif command == "demo":
                         if len(tokens) == 2:
-                            enable: bool = tokens[1] in ["true", "1", "on", "y", "yes"]
-                            writeCmdDemo(outf, enable)
+                            demoEnable: bool = tokens[1] in [
+                                "true",
+                                "1",
+                                "on",
+                                "y",
+                                "yes",
+                            ]
+                            writeCmdDemo(outf, demoEnable)
+                        else:
+                            sys.exit(f"Error: incorrect number of args for /{command}")
+                    elif command == "section":
+                        if len(tokens) == 2:
+                            taser: str = tokens[1]
+                            writeCmdSection(outf, taser)
                         else:
                             sys.exit(f"Error: incorrect number of args for /{command}")
             # only write controller inputs if they differ
