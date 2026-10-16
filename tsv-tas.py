@@ -1243,8 +1243,9 @@ def writeCmdDemo(file: FileIO, enable: bool) -> None:
     writeCommand(file, 0xC007, data)
 
 
-def writeCmdSection(file: FileIO, taser: str) -> None:
-    data: bytes = int(len(taser) + 1).to_bytes(2)
+def writeCmdSection(file: FileIO, player: bool, taser: str) -> None:
+    data: bytes = struct.pack("<b", player)
+    data += int(len(taser) + 1).to_bytes(2)
     data += bytes(taser, "utf-8") + b"\x00"
     size = len(data)
     data += struct.pack(f"{align_up(size,4)-size}x")
@@ -1708,12 +1709,16 @@ while loop or do_once:
                             writeCmdDemo(outf, demoEnable)
                         else:
                             sys.exit(f"Error: incorrect number of args for /{command}")
-                    elif command == "section":
-                        if len(tokens) == 2:
-                            taser: str = tokens[1]
-                            writeCmdSection(outf, taser)
+                    elif command in ["section", "msection", "csection"]:
+                        if len(tokens) >= 2:
+                            taser: str = ", ".join(tokens[1:])
+                            if command in ["section", "msection"]:
+                                writeCmdSection(outf, False, taser)
+                            if command in ["section", "csection"]:
+                                writeCmdSection(outf, True, taser)
                         else:
                             sys.exit(f"Error: incorrect number of args for /{command}")
+
             # only write controller inputs if they differ
             if (prevController[frame.second_player][0] != frame.buttons) or (
                 prevController[frame.second_player][1] != frame.left_stick
