@@ -1245,7 +1245,7 @@ def writeCmdDemo(file: FileIO, enable: bool) -> None:
 
 def writeCmdSection(file: FileIO, player: bool, taser: str) -> None:
     data: bytes = struct.pack("<b", player)
-    data += int(len(taser) + 1).to_bytes(2)
+    data += int(len(taser) + 1).to_bytes(2, "little")
     data += bytes(taser, "utf-8") + b"\x00"
     size = len(data)
     data += struct.pack(f"{align_up(size,4)-size}x")
